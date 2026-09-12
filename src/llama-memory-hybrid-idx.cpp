@@ -623,18 +623,21 @@ void llama_memory_hybrid_idx::set_input_qsa(
         ggml_tensor * blk_pos,
         ggml_tensor * bias,
         ggml_tensor * extra_cells,
+        ggml_tensor * extra_mask,
         const llama_ubatch * ubatch,
         int64_t n_kv,
         uint32_t ratio,
         bool blk_bias) const {
     GGML_ASSERT(ratio > 0);
     GGML_ASSERT(get_mem_idx() != nullptr);
+    GGML_ASSERT(extra_mask == nullptr || extra_cells != nullptr);
 
     GGML_ASSERT(blk_cells == nullptr || ggml_backend_buffer_is_host(blk_cells->buffer));
     GGML_ASSERT(blk_pos == nullptr || ggml_backend_buffer_is_host(blk_pos->buffer));
     GGML_ASSERT(ggml_backend_buffer_is_host(bias->buffer));
     GGML_ASSERT(cell_blk    == nullptr || ggml_backend_buffer_is_host(cell_blk->buffer));
     GGML_ASSERT(extra_cells == nullptr || ggml_backend_buffer_is_host(extra_cells->buffer));
+    GGML_ASSERT(extra_mask  == nullptr || ggml_backend_buffer_is_host(extra_mask->buffer));
 
     const int64_t n_ns     = bias->ne[2];            // streams in this ubatch
     const int64_t r        = ratio;
@@ -653,6 +656,7 @@ void llama_memory_hybrid_idx::set_input_qsa(
     int32_t * dst_blk_pos   = blk_pos ? (int32_t *) blk_pos->data : nullptr;
     float   * dst_bias      = (float   *) bias->data;
     int32_t * dst_extra     = extra_cells ? (int32_t *) extra_cells->data : nullptr;
+    float   * dst_extra_mask = extra_mask ? (float *) extra_mask->data : nullptr;
 
     if (dst_blk_pos) {
         std::fill(dst_blk_pos, dst_blk_pos + 4*n_blocks*n_ns, 0);
@@ -791,6 +795,16 @@ void llama_memory_hybrid_idx::set_input_qsa(
                             }
                         }
                         cur_extra[n_extra++] = own;
+                    }
+
+                    // the compact decode path gathers these cells as distinct keys, so the
+                    // repetition padding must be masked there instead of merely re-unmasked
+                    if (dst_extra_mask) {
+                        float * cur_extra_mask = dst_extra_mask + i*r;
+
+                        for (int64_t j = 0; j < r; ++j) {
+                            cur_extra_mask[j] = j < n_extra ? 0.0f : -INFINITY;
+                        }
                     }
 
                     while (n_extra < r) {
@@ -999,13 +1013,14 @@ void llama_memory_hybrid_idx_context::set_input_qsa(
         ggml_tensor * blk_pos,
         ggml_tensor * bias,
         ggml_tensor * extra_cells,
+        ggml_tensor * extra_mask,
         const llama_ubatch * ubatch,
         uint32_t ratio,
         bool blk_bias) const {
     GGML_ASSERT(mem != nullptr);
     GGML_ASSERT(get_idx() != nullptr);
 
-    mem->set_input_qsa(cell_blk, blk_cells, blk_pos, bias, extra_cells, ubatch,
+    mem->set_input_qsa(cell_blk, blk_cells, blk_pos, bias, extra_cells, extra_mask, ubatch,
             get_idx()->get_n_kv(), ratio, blk_bias);
 }
 

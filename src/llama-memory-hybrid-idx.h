@@ -129,9 +129,11 @@ public:
     //   bias      F32 [n_kv, n_tokens/ns, ns] -inf where invisible, large where always visible
     // blk_bias asks for the bias per block instead: [n_blocks, n_tokens/ns, ns]
     // the caller then adds the attention mask, the only part of the bias that varies within a block
+    //   extra_cells I32 [ratio, n_tokens/ns, ns] the incomplete tail's cells, padded by repetition
+    //   extra_mask  F32 [ratio, n_tokens/ns, ns] 0 for a real tail cell, -inf for the padding (optional)
     void set_input_qsa(ggml_tensor * cell_blk, ggml_tensor * blk_cells, ggml_tensor * blk_pos,
-                       ggml_tensor * bias, ggml_tensor * extra_cells, const llama_ubatch * ubatch,
-                       int64_t n_kv, uint32_t ratio, bool blk_bias) const;
+                       ggml_tensor * bias, ggml_tensor * extra_cells, ggml_tensor * extra_mask,
+                       const llama_ubatch * ubatch, int64_t n_kv, uint32_t ratio, bool blk_bias) const;
 
     // fills the dirty-block recompute inputs (member cells, rope positions, destination
     // rows in the flattened block-key cache) from the current qsa_prep
@@ -212,8 +214,8 @@ public:
     uint32_t get_n_stream() const;
 
     void set_input_qsa(ggml_tensor * cell_blk, ggml_tensor * blk_cells, ggml_tensor * blk_pos,
-                       ggml_tensor * bias, ggml_tensor * extra_cells, const llama_ubatch * ubatch,
-                       uint32_t ratio, bool blk_bias) const;
+                       ggml_tensor * bias, ggml_tensor * extra_cells, ggml_tensor * extra_mask,
+                       const llama_ubatch * ubatch, uint32_t ratio, bool blk_bias) const;
 
     // block-key cache plumbing for the graph builder
     const llama_memory_hybrid_idx::qsa_prep & qsa_prepare(const llama_ubatch * ubatch, uint32_t ratio) const;

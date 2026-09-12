@@ -2380,13 +2380,29 @@ struct llama_model_qwen4exp : public llama_model_base {
                             int * sections,
                             int   il);
 
+        // QSA selection of one layer: the cells to attend, and on the compact decode path the
+        // per-block visibility of the selected blocks (nullptr when the dense-mask path is used)
+        struct qsa_sel {
+            ggml_tensor * top_k    = nullptr; // I32 [n_top_k, n_tokens/n_stream, 1, n_stream]
+            ggml_tensor * blk_mask = nullptr; // F32 [ratio*n_sel, 1, n_stream]: 0 visible, -inf otherwise
+            llm_graph_input_qsa * inp = nullptr;
+        };
+
         // dense self-attention restricted to the cells that top_k names
         ggml_tensor * build_attn_qsa(
         llm_graph_input_attn_kv * inp,
                     ggml_tensor * q_cur,
                     ggml_tensor * k_cur,
                     ggml_tensor * v_cur,
-                    ggml_tensor * top_k,
+                const qsa_sel & sel,
+                          float   kq_scale,
+                            int   il);
+
+        // decode: gather the selected cells into a compact K/V and attend densely
+        ggml_tensor * build_attn_qsa_compact(
+        llm_graph_input_attn_kv * inp,
+                    ggml_tensor * q_cur,
+                const qsa_sel & sel,
                           float   kq_scale,
                             int   il);
 
@@ -2394,8 +2410,8 @@ struct llama_model_qwen4exp : public llama_model_base {
         // so the layers sharing a ratio share one input set
         std::map<uint32_t, llm_graph_input_qsa *> qsa_inps;
 
-        // QSA: token indices this layer's queries may attend to, or nullptr for dense
-        ggml_tensor * build_qsa_top_k(
+        // QSA: token indices this layer's queries may attend to (top_k == nullptr for dense)
+        qsa_sel build_qsa_top_k(
   const llama_memory_hybrid_idx_context * mctx_hyb,
                     ggml_tensor * cur,
                     ggml_tensor * inp_pos,
