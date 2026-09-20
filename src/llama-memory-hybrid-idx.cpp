@@ -183,12 +183,32 @@ llama_memory_context_ptr llama_memory_hybrid_idx::init_update(llama_context * lc
     return std::make_unique<llama_memory_hybrid_idx_context>(this, lctx, optimize);
 }
 
+void llama_memory_hybrid_idx::blk_book_reset(llama_seq_id seq_id) const {
+    if (!mem_blk || seq_id < 0) {
+        return;
+    }
+
+    const uint32_t s = get_mem_idx()->get_stream_of(seq_id);
+
+    if (s < blk_books.size()) {
+        blk_books[s] = {};
+    }
+}
+
+void llama_memory_hybrid_idx::blk_books_reset() const {
+    for (auto & book : blk_books) {
+        book = {};
+    }
+}
+
 void llama_memory_hybrid_idx::clear(bool data) {
     llama_memory_hybrid::clear(data);
 
     if (mem_idx) {
         mem_idx->clear(data);
     }
+
+    blk_books_reset();
 }
 
 bool llama_memory_hybrid_idx::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
@@ -201,6 +221,14 @@ bool llama_memory_hybrid_idx::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_po
         mem_idx->seq_rm(seq_id, p0, p1);
     }
 
+    if (p0 <= 0 && p1 < 0) {
+        if (seq_id < 0) {
+            blk_books_reset();
+        } else {
+            blk_book_reset(seq_id);
+        }
+    }
+
     return get_mem_attn()->seq_rm(seq_id, p0, p1);
 }
 
@@ -209,6 +237,12 @@ void llama_memory_hybrid_idx::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_i
 
     if (mem_idx) {
         mem_idx->seq_cp(seq_id_src, seq_id_dst, p0, p1);
+
+        // a cross-stream copy lands on the same cell indices as the source: the destination's
+        // book could match by accident while the block keys are still the previous occupant's
+        if (get_mem_idx()->get_stream_of(seq_id_src) != get_mem_idx()->get_stream_of(seq_id_dst)) {
+            blk_book_reset(seq_id_dst);
+        }
     }
 }
 
@@ -282,6 +316,9 @@ void llama_memory_hybrid_idx::state_read(llama_io_read_i & io, llama_seq_id seq_
             if (mem_idx) {
                 mem_idx->state_read_sinfo(io, seq_id, flags, nullptr, &sinfos_attn);
             }
+
+            // restored cells may reuse the previous occupant's indices; recompute their block keys
+            blk_book_reset(seq_id);
         }
 
     } catch (...) {
@@ -303,6 +340,7 @@ void llama_memory_hybrid_idx::state_drop(llama_seq_id seq_id) {
 
     get_mem_attn()->seq_rm(seq_id, -1, -1);
     get_mem_recr()->seq_rm(seq_id, -1, -1);
+    blk_book_reset(seq_id);
 
     if (mem_idx) {
         mem_idx->seq_rm(seq_id, -1, -1);

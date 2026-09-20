@@ -168,6 +168,12 @@ private:
     };
     mutable std::vector<blk_book> blk_books;
 
+    // forget what the block-key cache holds for a stream: cells rewritten without a ubatch
+    // (cross-stream seq_cp, state restore) can land on the same cell indices as the previous
+    // occupant, which the structural compare would take for clean blocks
+    void blk_book_reset(llama_seq_id seq_id) const;
+    void blk_books_reset() const;
+
     mutable qsa_prep prep;
 };
 
