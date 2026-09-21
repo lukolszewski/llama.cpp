@@ -248,6 +248,8 @@ public:
     ggml_status graph_compute(ggml_cgraph * gf, bool batched);
 
     // reserve a graph with a dummy ubatch of the specified size
+    ggml_cgraph * graph_reserve_ubatch(const llama_ubatch & ubatch, const llama_memory_context_i * mctx);
+
     ggml_cgraph * graph_reserve(
         uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only = false, size_t * sizes = nullptr);
 
@@ -377,6 +379,12 @@ private:
 
     // env: LLAMA_GRAPH_REUSE_DISABLE
     bool graph_reuse_disable = false;
+
+    // pipeline parallelism: last graph shape class the compute buffers were reserved for
+    bool     reserve_on_demand_disable = false;
+    uint32_t reserve_key_tokens = 0;
+    uint32_t reserve_key_seqs   = 0;
+    uint32_t reserve_key_outputs = 0;
 
     // perf
     mutable int64_t t_start_us  = 0;
