@@ -963,6 +963,15 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa_compact(
 
     idx = ggml_reshape_2d(ctx0, idx, n_w_pad, n_tokens);
 
+    if (n_tps > 1) {
+        // several tokens of one stream in the ubatch: the pool visibility and the tail are computed per ubatch
+        // (the dense path adds kq_mask for the causal part), so gather the per-cell mask of each token at its
+        // selected cells and add it. Decode (one token per stream) does not need it and skips the mask upload.
+        ggml_tensor * kqm = ggml_reshape_3d(ctx0, kq_mask, 1, kq_mask->ne[0], n_tokens);                 // [1, n_kv, n_tokens]
+        ggml_tensor * m_t = ggml_get_rows(ctx0, kqm, ggml_cast(ctx0, idx, GGML_TYPE_I32));                // F32 [1, n_w_pad, n_tokens]
+        mask = ggml_add(ctx0, mask, ggml_reshape_3d(ctx0, m_t, n_w_pad, 1, n_tokens));
+    }
+
     mask = ggml_cast(ctx0, mask, GGML_TYPE_F16);
     mask = ggml_reshape_4d(ctx0, mask, n_w_pad, 1, 1, n_tokens);
     cb(mask, "kq_mask_compact", il);
