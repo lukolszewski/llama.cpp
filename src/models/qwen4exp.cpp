@@ -978,9 +978,11 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa_compact(
         const int64_t kv_size = kv4->nb[3] / kv4->nb[2];
         GGML_ASSERT(kv4->nb[3] % kv4->nb[2] == 0);
 
-        ggml_tensor * off = ggml_cumsum(ctx0, ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, n_tokens), 1.0f)); // [1, n_tokens] = t + 1
+        // cumsum runs along dim 0, so the arange is built 1-d and reshaped to a row afterwards
+        ggml_tensor * off = ggml_cumsum(ctx0, ggml_fill(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_tokens), 1.0f)); // [n_tokens] = t + 1
         off = ggml_scale_bias(ctx0, off, 1.0f/(float) n_tps, -1.0f/(float) n_tps);                                       // t / n_tps
         off = ggml_scale(ctx0, ggml_floor(ctx0, ggml_scale_bias(ctx0, off, 1.0f, 1e-3f)), (float) kv_size);              // s * kv_size
+        off = ggml_reshape_2d(ctx0, off, 1, n_tokens);
         ggml_tensor * f = ggml_add(ctx0, idx, off); // [n_w_pad, n_tokens]
         idx_flat = ggml_cast(ctx0, ggml_reshape_1d(ctx0, f, n_w_pad*n_tokens), GGML_TYPE_I32);
         return idx_flat;
