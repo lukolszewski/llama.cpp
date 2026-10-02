@@ -193,9 +193,16 @@ bool llama_memory_hybrid_idx::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_po
     }
 
     if (mem_idx) {
-        const llama_pos stale = mem_idx_stale_pos(seq_id, p0);
+        // a removal past the sequence's last position touches no cell, so the grouping holds: do not stale it.
+        // speculative decoding issues one such seq_rm per step (the rejected drafts, often none), and a stale
+        // sequence makes kpool_layout_update rebuild its whole cell list - O(n_kv) per step, 36 -> 17 t/s at 221k
+        const bool noop = seq_id >= 0 && p0 > mem_idx->seq_pos_max(seq_id);
+
+        const llama_pos stale = noop ? 0 : mem_idx_stale_pos(seq_id, p0);
         mem_idx->seq_rm(seq_id, p0, p1);
-        mem_idx_stale_set(seq_id, stale);
+        if (!noop) {
+            mem_idx_stale_set(seq_id, stale);
+        }
 
         // removing a sequence can free cells another sequence shared, but only this one is marked stale, so the
         // survivor would keep shared = true and pin cache_safe off forever; stale every sequence to re-derive it
