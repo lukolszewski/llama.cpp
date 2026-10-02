@@ -460,9 +460,35 @@ const llama_memory_hybrid_idx::kpool_layout & llama_memory_hybrid_idx::kpool_lay
             }
         }
 
+        // a stale position above pos_min: nothing below it changed (every edit lowers the stale position, a copy or
+        // a restore sets it to 0), so keep that prefix, drop the rest and re-append what the sequence holds from
+        // there - O(edited) instead of O(n_kv). Speculative decoding edits the tail on every step.
+        bool incremental = false;
+        if (mem_idx_stale[s] != POS_CLEAN && mem_idx_stale[s] > sq.pos_min && !sq.cells.empty() && !sp.empty() &&
+                sq.pos_min == sp.begin()->first) {
+            const llama_pos stale = mem_idx_stale[s];
+
+            auto cut = std::lower_bound(sq.cells.begin(), sq.cells.end(), stale,
+                    [](const std::pair<llama_pos, uint32_t> & c, llama_pos p) { return c.first < p; });
+            const size_t n_cut = (size_t) (cut - sq.cells.begin());
+
+            sq.cells.erase(cut, sq.cells.end());
+            for (auto it = sp.lower_bound({ stale, 0 }); it != sp.end(); ++it) {
+                sq.cells.push_back(*it);
+            }
+
+            while (!sq.pools.empty() && (size_t) sq.pools.back() + kpool > n_cut) {
+                sq.pools.pop_back();
+            }
+            sq.j_next = sq.pools.empty() ? 0 : sq.pools.back() + kpool;
+
+            n_kept      = n_cut;
+            incremental = true;
+        }
+
         // the appended tail accounts for every cell only if nothing before it was dropped, but an edit can
         // regroup a sequence without changing its cell count, so a stale sequence must rebuild regardless
-        if (sq.cells.size() != sp.size() || mem_idx_stale[s] != POS_CLEAN) {
+        if (sq.cells.size() != sp.size() || (mem_idx_stale[s] != POS_CLEAN && !incremental)) {
             sq.cells.assign(sp.begin(), sp.end());
             sq.pools.clear();
             sq.j_next  = 0;
