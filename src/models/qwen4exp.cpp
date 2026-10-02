@@ -866,9 +866,13 @@ llama_model_qwen4exp::graph::qsa_sel llama_model_qwen4exp::graph::build_qsa_sel(
     // a distinct cell (top_k picks distinct pools, the tail is disjoint from the pools), so the gathered keys
     // are distinct; dead slots gather cell 0 and are masked. With a unified cache a stream mixes sequences and
     // the per-cell kq_mask stays authoritative, so the dense path is kept there.
+    // also small per-stream batches (speculative verification: 1 + n_draft tokens): every token gathers its own
+    // K/V from its stream, the pool visibility and the tail are per token, so the block-level mask stays exact
     static const bool compact_disable = getenv("LLAMA_QSA_COMPACT_DISABLE") != nullptr && atoi(getenv("LLAMA_QSA_COMPACT_DISABLE")) != 0;
+    static const int  compact_max_tps = getenv("LLAMA_QSA_COMPACT_MAX_TPS") ? atoi(getenv("LLAMA_QSA_COMPACT_MAX_TPS")) : 8;
     const bool compact = !compact_disable && cparams.flash_attn && !cparams.kv_unified &&
-        kq_mask->ne[1] == 1 && kq_mask->ne[2] == 1 && kq_mask->ne[3] == n_tokens;
+        kq_mask->ne[1] >= 1 && kq_mask->ne[1] <= compact_max_tps && kq_mask->ne[2] == 1 &&
+        kq_mask->ne[1]*kq_mask->ne[3] == n_tokens;
 
     if (compact) {
         ggml_tensor * idx_f = ggml_cast(ctx0, sel_idx, GGML_TYPE_F32);
@@ -934,48 +938,71 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa_compact(
 
     const auto * mctx_cur = inp->mctx;
 
-    const int64_t n_stream = n_tokens; // one token per stream
+    // every token attends its own compact K/V: the "stream" dim of the flash-attention call is the token
+    ggml_tensor * kq_mask = inp->get_kq_mask();
+    const int64_t n_stream = kq_mask->ne[3];
+    const int64_t n_tps    = kq_mask->ne[1];
     const int64_t n_w      = sel.idx->ne[0];
     const int64_t n_w_pad  = GGML_PAD(n_w, QSA_KV_PAD);
     const int64_t n_pad    = n_w_pad - n_w;
 
-    GGML_ASSERT(sel.idx->ne[1] == n_stream && sel.cmask->ne[1] == n_stream);
+    GGML_ASSERT(n_tps*n_stream == n_tokens);
+    GGML_ASSERT(sel.idx->ne[1] == n_tokens && sel.cmask->ne[1] == n_tokens);
 
-    // indices [n_w_pad, n_stream] and their mask [n_w_pad, 1, 1, n_stream]: selected cells, then padding
+    // indices [n_w_pad, n_tokens] and their mask [n_w_pad, 1, 1, n_tokens]: selected cells, then padding
     // that points at cell 0 and is masked out
-    ggml_tensor * idx  = ggml_reshape_3d(ctx0, sel.idx,   n_w, 1, n_stream);
-    ggml_tensor * mask = ggml_reshape_3d(ctx0, sel.cmask, n_w, 1, n_stream);
+    ggml_tensor * idx  = ggml_reshape_3d(ctx0, sel.idx,   n_w, 1, n_tokens);
+    ggml_tensor * mask = ggml_reshape_3d(ctx0, sel.cmask, n_w, 1, n_tokens);
 
     if (n_pad > 0) {
-        ggml_tensor * pad = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_pad, 1, n_stream);
+        ggml_tensor * pad = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_pad, 1, n_tokens);
 
         idx  = ggml_concat(ctx0, idx,  ggml_fill(ctx0, pad, 0.0f), 0);
         mask = ggml_concat(ctx0, mask, ggml_fill(ctx0, pad, -INFINITY), 0);
     }
 
-    idx = ggml_cast(ctx0, ggml_reshape_2d(ctx0, idx, n_w_pad, n_stream), GGML_TYPE_I32);
+    idx = ggml_reshape_2d(ctx0, idx, n_w_pad, n_tokens);
 
     mask = ggml_cast(ctx0, mask, GGML_TYPE_F16);
-    mask = ggml_reshape_4d(ctx0, mask, n_w_pad, 1, 1, n_stream);
+    mask = ggml_reshape_4d(ctx0, mask, n_w_pad, 1, 1, n_tokens);
     cb(mask, "kq_mask_compact", il);
 
-    // gather the selected rows of each stream: [n_embd_head*n_head_kv, n_kv, n_stream] rows
-    // are contiguous per cell in the cache, so one gather covers every head. get_rows
-    // returns f32 for any source type; flash-attention wants f16 [n_embd_head, n_kv, n_head_kv, n_stream]
+    // the cache view is [n_embd_head, n_head_kv, n_kv, n_stream] with the streams kv_size rows apart, so a flat
+    // [n_embd_head*n_head_kv, n_stream*kv_size] view addresses row s*kv_size + cell; add the token's stream offset
+    // (token t belongs to stream t / n_tps; cumsum of ones stands in for an arange, which has no source to split on)
+    ggml_tensor * idx_flat = nullptr;
+    auto make_idx = [&](ggml_tensor * kv4) {
+        if (idx_flat) {
+            return idx_flat;
+        }
+        const int64_t kv_size = kv4->nb[3] / kv4->nb[2];
+        GGML_ASSERT(kv4->nb[3] % kv4->nb[2] == 0);
+
+        ggml_tensor * off = ggml_cumsum(ctx0, ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, n_tokens), 1.0f)); // [1, n_tokens] = t + 1
+        off = ggml_scale_bias(ctx0, off, 1.0f/(float) n_tps, -1.0f/(float) n_tps);                                       // t / n_tps
+        off = ggml_scale(ctx0, ggml_floor(ctx0, ggml_scale_bias(ctx0, off, 1.0f, 1e-3f)), (float) kv_size);              // s * kv_size
+        ggml_tensor * f = ggml_add(ctx0, idx, off); // [n_w_pad, n_tokens]
+        idx_flat = ggml_cast(ctx0, ggml_reshape_1d(ctx0, f, n_w_pad*n_tokens), GGML_TYPE_I32);
+        return idx_flat;
+    };
+
+    // gather the selected rows of each token from its stream: rows are contiguous per cell in the cache, so one
+    // gather covers every head. get_rows returns f32 for any source type; flash-attention wants
+    // f16 [n_embd_head, n_w_pad, n_head_kv, n_tokens]
     auto gather = [&](ggml_tensor * kv4, const char * name) {
         GGML_ASSERT(kv4->nb[1] <= kv4->nb[2]); // not transposed
 
         const int64_t n_embd_head = kv4->ne[0];
         const int64_t n_head_kv   = kv4->ne[1];
-        const int64_t n_kv        = kv4->ne[2];
+        const int64_t kv_size     = kv4->nb[3] / kv4->nb[2];
 
         GGML_ASSERT(kv4->ne[3] == n_stream);
 
-        ggml_tensor * kv3 = ggml_view_3d(ctx0, kv4, n_embd_head*n_head_kv, n_kv, n_stream, kv4->nb[2], kv4->nb[3], 0);
+        ggml_tensor * kv2 = ggml_view_2d(ctx0, kv4, n_embd_head*n_head_kv, n_stream*kv_size, kv4->nb[2], 0);
 
-        ggml_tensor * sel_rows = ggml_get_rows(ctx0, kv3, idx);   // F32 [n_embd_head*n_head_kv, n_w_pad, n_stream]
-        sel_rows = ggml_reshape_4d(ctx0, sel_rows, n_embd_head, n_head_kv, n_w_pad, n_stream);
-        sel_rows = ggml_permute(ctx0, sel_rows, 0, 2, 1, 3);        // [n_embd_head, n_w_pad, n_head_kv, n_stream]
+        ggml_tensor * sel_rows = ggml_get_rows(ctx0, kv2, make_idx(kv4));   // F32 [n_embd_head*n_head_kv, n_w_pad*n_tokens]
+        sel_rows = ggml_reshape_4d(ctx0, sel_rows, n_embd_head, n_head_kv, n_w_pad, n_tokens);
+        sel_rows = ggml_permute(ctx0, sel_rows, 0, 2, 1, 3);        // [n_embd_head, n_w_pad, n_head_kv, n_tokens]
         sel_rows = ggml_cast(ctx0, sel_rows, GGML_TYPE_F16);
         cb(sel_rows, name, il);
 
@@ -985,8 +1012,8 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa_compact(
     ggml_tensor * k = gather(mctx_cur->get_k(ctx0, il), "k_compact");
     ggml_tensor * v = gather(mctx_cur->get_v(ctx0, il), "v_compact");
 
-    // one query per stream: [n_embd_head, 1, n_head, n_stream]
-    ggml_tensor * q = ggml_view_4d(ctx0, q_cur, q_cur->ne[0], 1, q_cur->ne[1], n_stream,
+    // one query per token: [n_embd_head, 1, n_head, n_tokens]
+    ggml_tensor * q = ggml_view_4d(ctx0, q_cur, q_cur->ne[0], 1, q_cur->ne[1], n_tokens,
             q_cur->nb[1], q_cur->nb[1], q_cur->nb[2], 0);
 
     ggml_tensor * cur = ggml_flash_attn_ext(ctx0, q, k, v, mask, kq_scale, hparams.f_max_alibi_bias,
@@ -997,8 +1024,8 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa_compact(
     ggml_flash_attn_ext_set_n_kv_max(cur, 0);
     ggml_prec_set_acc(cur, GGML_PREC_F32);
 
-    // [n_embd_head_v, n_head, 1, n_stream] -> [n_embd_head_v*n_head, n_tokens]
-    cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*cur->ne[1], n_stream);
+    // [n_embd_head_v, n_head, 1, n_tokens] -> [n_embd_head_v*n_head, n_tokens]
+    cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*cur->ne[1], n_tokens);
     cb(cur, "kqv_out", il);
 
     return cur;
