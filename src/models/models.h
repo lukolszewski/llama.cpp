@@ -2432,22 +2432,40 @@ struct llama_model_qwen4exp : public llama_model_base {
                             int * sections,
                             int   il);
 
+        // QSA selection of one layer: either the additive mask over the whole cache (mask), or on the
+        // compact decode path the selected cells (idx, F32 [n_sel, n_tokens], dead slots point at cell 0)
+        // with their visibility (cmask, F32 [n_sel, n_tokens], 0 visible / very negative otherwise)
+        struct qsa_sel {
+            ggml_tensor * mask  = nullptr;
+            ggml_tensor * idx   = nullptr;
+            ggml_tensor * cmask = nullptr;
+            int64_t       n_sel = 0;
+        };
+
         // dense self-attention over the cells the QSA mask keeps
         ggml_tensor * build_attn_qsa(
         llm_graph_input_attn_kv * inp,
                     ggml_tensor * q_cur,
                     ggml_tensor * k_cur,
                     ggml_tensor * v_cur,
-                    ggml_tensor * sel,
-                        int64_t   n_sel,
+                const qsa_sel & sel,
+                          float   kq_scale,
+                            int   il);
+
+        // decode: gather the selected cells into a compact K/V and attend densely
+        ggml_tensor * build_attn_qsa_compact(
+        llm_graph_input_attn_kv * inp,
+                    ggml_tensor * q_cur,
+                const qsa_sel & sel,
                           float   kq_scale,
                             int   il);
 
         // the QSA layers share one set of k-pool inputs, see llama_memory_hybrid_idx
         llm_graph_input_kpool * build_inp_kpool(const llama_memory_hybrid_idx_context * mctx_hyb);
 
-        // QSA: the additive mask [n_kv, n_tokens] of the top blocks and the tail, kq_mask included
-        ggml_tensor * build_qsa_sel(
+        // QSA: the additive mask [n_kv, n_tokens] of the top blocks and the tail, kq_mask included,
+        // or on the compact decode path the selected cells and their visibility
+        qsa_sel build_qsa_sel(
   const llama_memory_hybrid_idx_context * mctx_hyb,
           llm_graph_input_kpool * inp_kpool,
                     ggml_tensor * cur,
