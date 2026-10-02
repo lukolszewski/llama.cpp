@@ -869,7 +869,7 @@ llama_model_qwen4exp::graph::qsa_sel llama_model_qwen4exp::graph::build_qsa_sel(
     // also small per-stream batches (speculative verification: 1 + n_draft tokens): every token gathers its own
     // K/V from its stream, the pool visibility and the tail are per token, so the block-level mask stays exact
     static const bool compact_disable = getenv("LLAMA_QSA_COMPACT_DISABLE") != nullptr && atoi(getenv("LLAMA_QSA_COMPACT_DISABLE")) != 0;
-    static const int  compact_max_tps = getenv("LLAMA_QSA_COMPACT_MAX_TPS") ? atoi(getenv("LLAMA_QSA_COMPACT_MAX_TPS")) : 8;
+    static const int  compact_max_tps = getenv("LLAMA_QSA_COMPACT_MAX_TPS") ? atoi(getenv("LLAMA_QSA_COMPACT_MAX_TPS")) : 1; // > 1 is experimental: greedy MTP output still diverges from the plain greedy output
     const bool compact = !compact_disable && cparams.flash_attn && !cparams.kv_unified &&
         kq_mask->ne[1] >= 1 && kq_mask->ne[1] <= compact_max_tps && kq_mask->ne[2] == 1 &&
         kq_mask->ne[1]*kq_mask->ne[3] == n_tokens;
