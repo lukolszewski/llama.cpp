@@ -827,6 +827,7 @@ struct ggml_backend_sched {
     // after the split that consumed it has recorded its event.
     bool stage_inputs;
     bool stage_always;              // GGML_SCHED_STAGE_INPUTS=2: stage every compute, not only reused graphs
+    bool stage_request;             // set by the user per compute (ggml_backend_sched_set_stage_inputs); default false
     int  n_computes_since_alloc;    // 0 on the first compute after alloc_graph (fresh slot), >0 when the graph is reused
     int  stage_copy;
     ggml_backend_buffer_t stage_bufs[GGML_SCHED_MAX_BACKENDS][GGML_SCHED_MAX_COPIES];
@@ -1693,7 +1694,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     // rotated in alloc_graph), so the synchronous copy's wait on events[b][cur_copy] is a wait on a compute n_copies ago
     // (free). Prefill ubatches rebuild every time and pay only the staging memcpy; decode ubatches reuse the graph
     // and need the staging to overlap. GGML_SCHED_STAGE_INPUTS=2 stages every compute (the previous behaviour).
-    const bool stage_this = sched->stage_inputs && (sched->stage_always || sched->n_computes_since_alloc > 0);
+    const bool stage_this = sched->stage_inputs && (sched->stage_always || (sched->stage_request && sched->n_computes_since_alloc > 0));
     sched->n_computes_since_alloc++;
 
     // staging slot of this graph compute (rotates per compute, independently of the graph's input copy slot)
@@ -2112,6 +2113,7 @@ ggml_backend_sched_t ggml_backend_sched_new(
         (getenv("GGML_SCHED_STAGE_INPUTS") == nullptr || atoi(getenv("GGML_SCHED_STAGE_INPUTS")) != 0);
     sched->stage_always = getenv("GGML_SCHED_STAGE_INPUTS") != nullptr && atoi(getenv("GGML_SCHED_STAGE_INPUTS")) == 2;
     sched->n_computes_since_alloc = 0;
+    sched->stage_request = false;
     sched->stage_copy = 0;
     memset(sched->stage_bufs, 0, sizeof(sched->stage_bufs));
     memset(sched->stage_recorded, 0, sizeof(sched->stage_recorded));
@@ -2252,6 +2254,11 @@ void ggml_backend_sched_synchronize(ggml_backend_sched_t sched) {
         // which avoids changes in the graph that could cause CUDA or other graphs to be disabled
         sched->next_copy = 0;
     }
+}
+
+void ggml_backend_sched_set_stage_inputs(ggml_backend_sched_t sched, bool enable) {
+    GGML_ASSERT(sched);
+    sched->stage_request = enable;
 }
 
 void ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data) {

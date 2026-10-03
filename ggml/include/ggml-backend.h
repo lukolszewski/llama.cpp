@@ -307,6 +307,9 @@ extern "C" {
     typedef struct ggml_backend_sched * ggml_backend_sched_t;
 
     // Evaluation callback for each node in the graph (set with ggml_backend_sched_set_eval_callback)
+    // request input staging (pinned, asynchronous input copies) for the next graph computes; only meaningful with
+    // pipeline parallelism and a graph that is reused across overlapping computes (default: off)
+    GGML_API void                 ggml_backend_sched_set_stage_inputs(ggml_backend_sched_t sched, bool enable);
     // when ask == true, the scheduler wants to know if the user wants to observe this node
     // this allows the scheduler to batch nodes together in order to evaluate them in a single call
     //
