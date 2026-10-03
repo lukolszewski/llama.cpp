@@ -826,6 +826,8 @@ struct ggml_backend_sched {
     // backend's compute stream, where the stream order provides the dependency. The staging slot is reused only
     // after the split that consumed it has recorded its event.
     bool stage_inputs;
+    bool stage_always;              // GGML_SCHED_STAGE_INPUTS=2: stage every compute, not only reused graphs
+    int  n_computes_since_alloc;    // 0 on the first compute after alloc_graph (fresh slot), >0 when the graph is reused
     int  stage_copy;
     ggml_backend_buffer_t stage_bufs[GGML_SCHED_MAX_BACKENDS][GGML_SCHED_MAX_COPIES];
     ggml_backend_event_t  stage_events[GGML_SCHED_MAX_BACKENDS][GGML_SCHED_MAX_COPIES];
@@ -1687,9 +1689,16 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     std::string trace_line;
     const int64_t t_trace_start = sched_trace ? ggml_time_us() : 0;
 
+    // staging is only needed when the graph is REUSED: a freshly allocated graph got a fresh input-copy slot (cur_copy
+    // rotated in alloc_graph), so the synchronous copy's wait on events[b][cur_copy] is a wait on a compute n_copies ago
+    // (free). Prefill ubatches rebuild every time and pay only the staging memcpy; decode ubatches reuse the graph
+    // and need the staging to overlap. GGML_SCHED_STAGE_INPUTS=2 stages every compute (the previous behaviour).
+    const bool stage_this = sched->stage_inputs && (sched->stage_always || sched->n_computes_since_alloc > 0);
+    sched->n_computes_since_alloc++;
+
     // staging slot of this graph compute (rotates per compute, independently of the graph's input copy slot)
     const int stage_copy = sched->stage_copy;
-    if (sched->stage_inputs) {
+    if (stage_this) {
         sched->stage_copy = (sched->stage_copy + 1) % sched->n_copies;
     }
     // Staging is per (backend, stage slot), NOT per split: one backend usually owns several splits of the same
@@ -1702,7 +1711,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     char * stage_base[GGML_SCHED_MAX_BACKENDS] = { nullptr };
     size_t stage_cap [GGML_SCHED_MAX_BACKENDS] = { 0 };
 
-    if (sched->stage_inputs) {
+    if (stage_this) {
         for (int split_id = 0; split_id < sched->n_splits; split_id++) {
             struct ggml_backend_sched_split * split = &splits[split_id];
             ggml_backend_t split_backend = sched->backends[split->backend_id];
@@ -2101,6 +2110,8 @@ ggml_backend_sched_t ggml_backend_sched_new(
 
     sched->stage_inputs = sched->n_copies > 1 &&
         (getenv("GGML_SCHED_STAGE_INPUTS") == nullptr || atoi(getenv("GGML_SCHED_STAGE_INPUTS")) != 0);
+    sched->stage_always = getenv("GGML_SCHED_STAGE_INPUTS") != nullptr && atoi(getenv("GGML_SCHED_STAGE_INPUTS")) == 2;
+    sched->n_computes_since_alloc = 0;
     sched->stage_copy = 0;
     memset(sched->stage_bufs, 0, sizeof(sched->stage_bufs));
     memset(sched->stage_recorded, 0, sizeof(sched->stage_recorded));
@@ -2196,6 +2207,7 @@ bool ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgra
 
     sched->cur_copy = sched->next_copy;
     sched->next_copy = (sched->next_copy + 1) % sched->n_copies;
+    sched->n_computes_since_alloc = 0;
 
     ggml_backend_sched_split_graph(sched, graph);
 
