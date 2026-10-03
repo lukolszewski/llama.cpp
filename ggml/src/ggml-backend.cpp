@@ -1830,9 +1830,17 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 stage_off += GGML_PAD(nbytes, 256);
                 trace_kind = 'h';
             } else {
-                // wait for the split backend to finish using the input before overwriting it
+                // wait for the split backend to finish using the input before overwriting it.
+                // the copy below is issued on the *source* backend's stream (cpy_tensor_async), so with a reused graph
+                // (the input-copy slot does not rotate) the source stream must wait for the destination's previous
+                // split, otherwise the next ubatch's hidden state lands while the destination still reads the previous
+                // one. The destination-side wait alone orders only the destination's own stream (a no-op for itself).
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                     ggml_backend_event_wait(split_backend, sched->events[split_backend_id][sched->cur_copy]);
+                    if (input_backend != split_backend && input_backend->iface.event_wait != NULL &&
+                            getenv("GGML_SCHED_NO_HOP_WAIT") == nullptr) {
+                        ggml_backend_event_wait(input_backend, sched->events[split_backend_id][sched->cur_copy]);
+                    }
                 } else {
                     ggml_backend_synchronize(split_backend);
                 }
