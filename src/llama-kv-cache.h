@@ -1,5 +1,8 @@
 #pragma once
 
+// a cell position that no query can reach: fits exactly in a float (the mask is built with f32 ops)
+#define LLAMA_KQ_POS_NEVER (1 << 30)
+
 #include "llama-batch.h"
 #include "llama-graph.h"
 #include "llama-kv-cells.h"
@@ -234,6 +237,9 @@ public:
     void set_input_k_shift(ggml_tensor * dst) const;
 
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
+    // device-built causal mask: per stream the position of every cell that this stream's sequence may attend,
+    // LLAMA_KQ_POS_NEVER for empty cells and cells of other sequences (I32 [n_kv, n_stream])
+    void set_input_kq_pos    (ggml_tensor * dst, const llama_ubatch * ubatch) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
     void set_input_k_rot(ggml_tensor * dst) const;
@@ -429,6 +435,9 @@ public:
 
     void set_input_k_shift   (ggml_tensor * dst) const;
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
+    // device-built causal mask: per stream the position of every cell that this stream's sequence may attend,
+    // LLAMA_KQ_POS_NEVER for empty cells and cells of other sequences (I32 [n_kv, n_stream])
+    void set_input_kq_pos    (ggml_tensor * dst, const llama_ubatch * ubatch) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
     void set_input_k_rot(ggml_tensor * dst) const;

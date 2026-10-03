@@ -17,6 +17,9 @@ struct ggml_cgraph;
 struct ggml_context;
 struct ggml_tensor;
 
+// device-built causal KQ mask from cell/query positions (llama-graph.cpp); backend != nullptr pins the ops to it
+ggml_tensor * llm_graph_build_kq_mask_from_pos(ggml_context * ctx, ggml_tensor * kq_pos, ggml_tensor * kq_qpos, ggml_type type, ggml_backend_sched_t sched, ggml_backend_t backend);
+
 struct llama_cparams;
 struct llama_layer;
 
@@ -338,12 +341,19 @@ public:
     ggml_tensor * get_v_idxs() const { return self_v_idxs; }
 
     ggml_tensor * get_kq_mask() const { return self_kq_mask_cnv; }
+    ggml_tensor * get_kq_pos()  const { return self_kq_pos; }
+    ggml_tensor * get_kq_qpos() const { return self_kq_qpos; }
 
     ggml_tensor * self_k_idxs = nullptr; // I64 [n_batch]
     ggml_tensor * self_v_idxs = nullptr; // I64 [n_batch] or [n_batch*n_embd_v_gqa]
 
     ggml_tensor * self_kq_mask     = nullptr; // F32/F16 [n_kv, n_batch/n_stream, 1, n_stream]
     ggml_tensor * self_kq_mask_cnv = nullptr; //         [n_kv, n_batch/n_stream, 1, n_stream]
+
+    // device-built mask (see build_attn_inp_kq_mask_device): instead of uploading the O(n_kv x n_batch) mask and
+    // copying it to every device, upload the cell positions once and derive the mask with a few ops on each device
+    ggml_tensor * self_kq_pos  = nullptr; // I32 [n_kv, n_stream]
+    ggml_tensor * self_kq_qpos = nullptr; // I32 [n_batch/n_stream, n_stream]
 
     // note: assumes v_rot^2 == I
     ggml_tensor * self_k_rot = nullptr;
@@ -387,6 +397,11 @@ public:
 
     ggml_tensor * self_kq_mask     = nullptr; // F32/F16 [n_kv, n_batch/n_stream, 1, n_stream]
     ggml_tensor * self_kq_mask_cnv = nullptr; //         [n_kv, n_batch/n_stream, 1, n_stream]
+
+    // device-built mask (see build_attn_inp_kq_mask_device): instead of uploading the O(n_kv x n_batch) mask and
+    // copying it to every device, upload the cell positions once and derive the mask with a few ops on each device
+    ggml_tensor * self_kq_pos  = nullptr; // I32 [n_kv, n_stream]
+    ggml_tensor * self_kq_qpos = nullptr; // I32 [n_batch/n_stream, n_stream]
 
     const llama_hparams hparams;
     const llama_cparams cparams;
@@ -586,6 +601,11 @@ public:
 
     ggml_tensor * self_kq_mask     = nullptr; // F32/F16 [n_kv, n_batch/n_stream, 1, n_stream]
     ggml_tensor * self_kq_mask_cnv = nullptr; //         [n_kv, n_batch/n_stream, 1, n_stream]
+
+    // device-built mask (see build_attn_inp_kq_mask_device): instead of uploading the O(n_kv x n_batch) mask and
+    // copying it to every device, upload the cell positions once and derive the mask with a few ops on each device
+    ggml_tensor * self_kq_pos  = nullptr; // I32 [n_kv, n_stream]
+    ggml_tensor * self_kq_qpos = nullptr; // I32 [n_batch/n_stream, n_stream]
 
     ggml_tensor * self_k_rot = nullptr;
 

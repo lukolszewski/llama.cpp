@@ -2437,6 +2437,10 @@ struct llama_model_qwen4exp : public llama_model_base {
         // build_rs writes the state tensor in place, so one gather per cache tensor is reused
         std::map<ggml_tensor *, ggml_tensor *> rs_rows;
 
+        // device-built KQ mask, one chain per device so that no card receives it over PCIe (see llm_graph_build_kq_mask_from_pos)
+        std::map<ggml_backend_dev_t, ggml_tensor *> kq_mask_dev;
+        ggml_tensor * kq_mask_for_layer(llm_graph_input_attn_kv * inp, int il);
+
         // one conv history per cache tensor: delta-net and PLE each have their own
         ggml_tensor * build_conv_state_at(
              llm_graph_input_rs * inp,

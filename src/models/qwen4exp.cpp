@@ -1005,7 +1005,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa(
         return cur;
     }
 
-    ggml_tensor * kq_mask = inp->get_kq_mask();
+    ggml_tensor * kq_mask = kq_mask_for_layer(inp, il);
 
     // prepare new kq mask - starts filled with -INFINITY
     ggml_tensor * kq_mask_all = ggml_fill(ctx0, kq_mask, -INFINITY);
@@ -1052,6 +1052,36 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa(
     return cur;
 }
 
+// The host-filled KQ mask is a graph input the scheduler copies to every device (84 MB per 512-token ubatch at 82k
+// context); with the device-built variant each card derives it from the 330 KB position input instead, so the
+// chain is built once per device and pinned there.
+ggml_tensor * llama_model_qwen4exp::graph::kq_mask_for_layer(llm_graph_input_attn_kv * inp, int il) {
+    if (inp->get_kq_pos() == nullptr) {
+        return inp->get_kq_mask();
+    }
+
+    ggml_backend_dev_t dev = model.dev_layer(il);
+
+    auto it = kq_mask_dev.find(dev);
+    if (it != kq_mask_dev.end()) {
+        return it->second;
+    }
+
+    ggml_backend_t backend = nullptr;
+    for (int i = 0; i < ggml_backend_sched_get_n_backends(sched); ++i) {
+        ggml_backend_t b = ggml_backend_sched_get_backend(sched, i);
+        if (ggml_backend_get_device(b) == dev) {
+            backend = b;
+            break;
+        }
+    }
+
+    ggml_tensor * mask = llm_graph_build_kq_mask_from_pos(ctx0, inp->get_kq_pos(), inp->get_kq_qpos(), inp->get_kq_mask()->type, sched, backend);
+    kq_mask_dev[dev] = mask;
+
+    return mask;
+}
+
 ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
         llm_graph_input_attn_kv * inp,
         const llama_memory_hybrid_idx_context * mctx_hyb,
@@ -1065,7 +1095,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
     // indexer reads the same block input as q/k/v; no cache or no ratio means dense
     const bool qsa = mctx_hyb->get_idx() != nullptr && hparams.dsv4_compress_ratios[il] > 0;
 
-    const qsa_sel sel = qsa ? build_qsa_top_k(mctx_hyb, cur, inp_pos, inp->get_kq_mask(), sections, il) : qsa_sel{};
+    const qsa_sel sel = qsa ? build_qsa_top_k(mctx_hyb, cur, inp_pos, kq_mask_for_layer(inp, il), sections, il) : qsa_sel{};
 
     // Qwen3Next uses a single Q projection that outputs query + gate
     ggml_tensor * Qcur_full = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s); // [ (n_embd_head * 2) * n_head, n_tokens ]
