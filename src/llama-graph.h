@@ -17,6 +17,11 @@ struct ggml_cgraph;
 struct ggml_context;
 struct ggml_tensor;
 
+// LLAMA_DECODE_PIPELINE=1: pure decode batches are split into per-sequence ubatches and the decode graph is built
+// stream-agnostic (flat all-stream views + stream index inputs, index-based state write-backs) so that one graph object
+// is reused across streams and the scheduler pipelines the ubatches across the devices
+bool llm_graph_decode_pipeline();
+
 // device-built causal KQ mask from cell/query positions (llama-graph.cpp); backend != nullptr pins the ops to it
 ggml_tensor * llm_graph_build_kq_mask_from_pos(ggml_context * ctx, ggml_tensor * kq_pos, ggml_tensor * kq_qpos, ggml_type type, ggml_backend_sched_t sched, ggml_backend_t backend);
 
@@ -278,6 +283,9 @@ public:
     ggml_tensor * s_copy_main;   // I32 [n_seqs]
     ggml_tensor * s_copy_extra;  // I32 [n_rs - n_seqs]
 
+    // stream-agnostic write-back: the recurrent cell of each sequence (head + i), I64 [n_seqs]; nullptr when not pipelining
+    ggml_tensor * rs_idx = nullptr;
+
     const llama_memory_recurrent_context * mctx;
 
     // used in view offsets, need to match for valid graph reuse
@@ -354,6 +362,10 @@ public:
     // copying it to every device, upload the cell positions once and derive the mask with a few ops on each device
     ggml_tensor * self_kq_pos  = nullptr; // I32 [n_kv, n_stream]
     ggml_tensor * self_kq_qpos = nullptr; // I32 [n_batch/n_stream, n_stream]
+
+    // stream-agnostic decode graph: the ubatch's stream index (sinfo.s0) for flat all-stream gathers, I32 [1]
+    ggml_tensor * self_strm = nullptr;
+    ggml_tensor * get_strm() const { return self_strm; }
 
     // note: assumes v_rot^2 == I
     ggml_tensor * self_k_rot = nullptr;
@@ -848,7 +860,12 @@ struct llm_graph_params {
 
         // when we split the batch using "equal_seqs" we have to verify that the participating sequences are the same
         //   the reason is because the set of attention streams would be different for different sequences
-        if (can_reuse_ubatch && ubatch.equal_seqs()) {
+        // stream-agnostic decode graphs (LLAMA_DECODE_PIPELINE): one sequence per ubatch, every stream-dependent
+        // address is an input, so the sequence set does not matter
+        const bool stream_agnostic = llm_graph_decode_pipeline() &&
+            ubatch.n_tokens == 1 && ubatch.n_seqs == 1 && other.ubatch.n_tokens == 1 && other.ubatch.n_seqs == 1;
+
+        if (can_reuse_ubatch && ubatch.equal_seqs() && !stream_agnostic) {
             if (!ubatch.data) {
                 // if the old ubatch does not own it's data, then we cannot guarantee that it is still alive, and
                 //   therefore we cannot perform the sequence id check. normally should never happen

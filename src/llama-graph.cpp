@@ -54,6 +54,11 @@ static ggml_tensor * build_attn_inp_kq_mask(
 // 2-D (M-RoPE image) ubatches keep the host mask. LLAMA_KQ_MASK_DEVICE=0 disables it.
 // M-RoPE models carry 4 position components for every ubatch; text tokens have y == x == t, image tokens share one t
 // and differ in (y, x) with a raster-order tie rule in the host mask. The 1-D rule below is exact for text-only ubatches.
+bool llm_graph_decode_pipeline() {
+    static const bool enabled = getenv("LLAMA_DECODE_PIPELINE") != nullptr && atoi(getenv("LLAMA_DECODE_PIPELINE")) != 0;
+    return enabled;
+}
+
 static bool ubatch_pos_is_1d(const llama_ubatch & ubatch) {
     if (!ubatch.is_pos_2d()) {
         return true;
@@ -435,6 +440,14 @@ void llm_graph_input_rs::set_input(const llama_ubatch * ubatch) {
             data[i] = mctx->s_copy(i);
         }
     }
+
+    if (rs_idx && rs_idx->buffer) {
+        GGML_ASSERT(ggml_backend_buffer_is_host(rs_idx->buffer));
+        int64_t * data = (int64_t *) rs_idx->data;
+        for (int64_t i = 0; i < rs_idx->ne[0]; ++i) {
+            data[i] = (int64_t) mctx->get_head() + i;
+        }
+    }
 }
 
 bool llm_graph_input_rs::can_reuse(const llm_graph_params & params) {
@@ -449,7 +462,8 @@ bool llm_graph_input_rs::can_reuse(const llm_graph_params & params) {
     res &= s_copy_main->ne[0]  == params.ubatch.n_seqs;
     res &= s_copy_extra->ne[0] == mctx->get_n_rs() - params.ubatch.n_seqs;
 
-    res &= head == mctx->get_head();
+    res &= (rs_idx != nullptr) == mctx->decode_pipelined();
+    res &= rs_idx != nullptr || head == mctx->get_head();
     res &= rs_z == mctx->get_rs_z();
 
     return res;
@@ -579,6 +593,10 @@ void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
         GGML_ASSERT(ggml_backend_buffer_is_host(self_kq_qpos->buffer));
         memcpy(self_kq_qpos->data, ubatch->pos, ubatch->n_tokens*sizeof(llama_pos));
     }
+    if (self_strm && self_strm->buffer) {
+        GGML_ASSERT(ggml_backend_buffer_is_host(self_strm->buffer));
+        ((int32_t *) self_strm->data)[0] = (int32_t) mctx->get_s0();
+    }
 
     if (self_k_rot && self_k_rot->buffer) {
         mctx->set_input_k_rot(self_k_rot);
@@ -602,6 +620,7 @@ bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
     res &= can_reuse_kq_mask(self_kq_mask_cnv, mctx, params.ubatch, params.cparams);
     // the device-built mask is only valid for the ubatch class it was built for
     res &= (self_kq_pos != nullptr) == kq_mask_on_device(hparams, params.cparams, params.ubatch);
+    res &= (self_strm != nullptr) == mctx->decode_pipelined();
 
     return res;
 }
@@ -1209,6 +1228,10 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
         GGML_ASSERT(ggml_backend_buffer_is_host(inp_attn->self_kq_qpos->buffer));
         memcpy(inp_attn->self_kq_qpos->data, ubatch->pos, ubatch->n_tokens*sizeof(llama_pos));
     }
+    if (inp_attn->self_strm && inp_attn->self_strm->buffer) {
+        GGML_ASSERT(ggml_backend_buffer_is_host(inp_attn->self_strm->buffer));
+        ((int32_t *) inp_attn->self_strm->data)[0] = (int32_t) mctx->get_attn()->get_s0();
+    }
 
     if (inp_attn->self_k_rot && inp_attn->self_k_rot->buffer) {
         mctx->get_attn()->set_input_k_rot(inp_attn->self_k_rot);
@@ -1227,6 +1250,14 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
         // assuming copy destinations ALWAYS happen ONLY on the cells between head and head+n
         for (uint32_t i = 0; i < n_rs; ++i) {
             data[i] = mctx->get_recr()->s_copy(i);
+        }
+    }
+
+    if (inp_rs->rs_idx && inp_rs->rs_idx->buffer) {
+        GGML_ASSERT(ggml_backend_buffer_is_host(inp_rs->rs_idx->buffer));
+        int64_t * idx = (int64_t *) inp_rs->rs_idx->data;
+        for (int64_t i = 0; i < inp_rs->rs_idx->ne[0]; ++i) {
+            idx[i] = (int64_t) mctx->get_recr()->get_head() + i;
         }
     }
 }
@@ -1249,7 +1280,8 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
     res &= inp_rs->s_copy_main->ne[0]  == params.ubatch.n_seqs;
     res &= inp_rs->s_copy_extra->ne[0] == mctx->get_recr()->get_n_rs() - params.ubatch.n_seqs;
 
-    res &= inp_rs->head == mctx->get_recr()->get_head();
+    res &= (inp_rs->rs_idx != nullptr) == mctx->get_recr()->decode_pipelined();
+    res &= inp_rs->rs_idx != nullptr || inp_rs->head == mctx->get_recr()->get_head();
     res &= inp_rs->rs_z == mctx->get_recr()->get_rs_z();
 
     return res;
@@ -1274,6 +1306,14 @@ void llm_graph_input_mem_hybrid_k::set_input(const llama_ubatch * ubatch) {
             data[i] = mctx->get_recr()->s_copy(i);
         }
     }
+
+    if (inp_rs->rs_idx && inp_rs->rs_idx->buffer) {
+        GGML_ASSERT(ggml_backend_buffer_is_host(inp_rs->rs_idx->buffer));
+        int64_t * idx = (int64_t *) inp_rs->rs_idx->data;
+        for (int64_t i = 0; i < inp_rs->rs_idx->ne[0]; ++i) {
+            idx[i] = (int64_t) mctx->get_recr()->get_head() + i;
+        }
+    }
 }
 
 bool llm_graph_input_mem_hybrid_k::can_reuse(const llm_graph_params & params) {
@@ -1292,7 +1332,8 @@ bool llm_graph_input_mem_hybrid_k::can_reuse(const llm_graph_params & params) {
     res &= inp_rs->s_copy_main->ne[0]  == params.ubatch.n_seqs;
     res &= inp_rs->s_copy_extra->ne[0] == mctx->get_recr()->get_n_rs() - params.ubatch.n_seqs;
 
-    res &= inp_rs->head == mctx->get_recr()->get_head();
+    res &= (inp_rs->rs_idx != nullptr) == mctx->get_recr()->decode_pipelined();
+    res &= inp_rs->rs_idx != nullptr || inp_rs->head == mctx->get_recr()->get_head();
     res &= inp_rs->rs_z == mctx->get_recr()->get_rs_z();
 
     return res;
@@ -1348,6 +1389,14 @@ void llm_graph_input_mem_hybrid_iswa::set_input(const llama_ubatch * ubatch) {
             data[i] = mctx->get_recr()->s_copy(i);
         }
     }
+
+    if (inp_rs->rs_idx && inp_rs->rs_idx->buffer) {
+        GGML_ASSERT(ggml_backend_buffer_is_host(inp_rs->rs_idx->buffer));
+        int64_t * idx = (int64_t *) inp_rs->rs_idx->data;
+        for (int64_t i = 0; i < inp_rs->rs_idx->ne[0]; ++i) {
+            idx[i] = (int64_t) mctx->get_recr()->get_head() + i;
+        }
+    }
 }
 
 bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params) {
@@ -1380,7 +1429,8 @@ bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params)
     res &= inp_rs->s_copy_main->ne[0]  == params.ubatch.n_seqs;
     res &= inp_rs->s_copy_extra->ne[0] == mctx->get_recr()->get_n_rs() - params.ubatch.n_seqs;
 
-    res &= inp_rs->head == mctx->get_recr()->get_head();
+    res &= (inp_rs->rs_idx != nullptr) == mctx->get_recr()->decode_pipelined();
+    res &= inp_rs->rs_idx != nullptr || inp_rs->head == mctx->get_recr()->get_head();
     res &= inp_rs->rs_z == mctx->get_recr()->get_rs_z();
 
     return res;
@@ -2943,6 +2993,12 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
             inp->self_kq_mask = build_attn_inp_kq_mask(ctx0, mctx_cur, ubatch, cparams);
             inp->self_kq_mask_cnv = inp->self_kq_mask;
         }
+
+        if (mctx_cur->decode_pipelined()) {
+            inp->self_strm = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
+            ggml_set_input(inp->self_strm);
+            ggml_set_name(inp->self_strm, "attn_inp_strm");
+        }
     }
 
     inp->self_k_rot = mctx_cur->build_input_k_rot(ctx0);
@@ -3640,6 +3696,12 @@ static std::unique_ptr<llm_graph_input_rs> build_rs_inp_impl(
 
     inp->head = mctx_cur->get_head();
     inp->rs_z = mctx_cur->get_rs_z();
+
+    if (mctx_cur->decode_pipelined()) {
+        inp->rs_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I64, n_seqs);
+        ggml_set_input(inp->rs_idx);
+        ggml_set_name(inp->rs_idx, "rs_idx");
+    }
 
     return inp;
 }

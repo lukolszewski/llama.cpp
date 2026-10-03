@@ -479,6 +479,12 @@ public:
     void set_input(const llama_ubatch * ubatch) override {
         mctx->get_idx()->set_input_k_idxs(k_idxs, ubatch);
         mctx->set_input_qsa(cell_blk, blk_cells, blk_pos, bias, extra_cells, extra_mask, ubatch, ratio, blk_bias, blk_idx, blk_add, q_idx, q_tail);
+        if (strm && strm->buffer) {
+            ((int32_t *) strm->data)[0] = (int32_t) mctx->get_idx()->get_s0();
+        }
+        if (blk_strm && blk_strm->buffer) {
+            ((int32_t *) blk_strm->data)[0] = (int32_t) (ubatch->seq_id[0] ? mctx->blk_stream0(ubatch->seq_id[0][0]) : 0);
+        }
 
         if (dirty_cells) {
             mctx->set_input_qsa_dirty(dirty_cells, dirty_pos, dirty_dst, ubatch, ratio);
@@ -512,6 +518,7 @@ public:
         res &= extra_cells == nullptr || extra_cells->ne[1] == params.ubatch.n_tokens/n_stream;
         res &= extra_mask  == nullptr || extra_mask->ne[1]  == params.ubatch.n_tokens/n_stream;
         res &= extra_mask  == nullptr || params.cparams.flash_attn;
+        res &= (strm != nullptr) == mctx->decode_pipelined();
 
         if (res && dirty_cells) {
             const auto & prp = mctx->qsa_prepare(&params.ubatch, ratio);
@@ -534,6 +541,9 @@ public:
     ggml_tensor * blk_add     = nullptr; // F32 [n_blocks, n_stream]
     ggml_tensor * q_idx       = nullptr; // I32 [n_tokens/n_stream, n_stream]
     ggml_tensor * q_tail      = nullptr; // I32 [n_tokens/n_stream, n_stream]
+    // stream-agnostic decode graph (LLAMA_DECODE_PIPELINE): the ubatch's indexer-cache stream and block-cache stream, I32 [1]
+    ggml_tensor * strm        = nullptr;
+    ggml_tensor * blk_strm    = nullptr;
     ggml_tensor * extra_cells = nullptr; // I32 [ratio, n_tokens/n_stream, n_stream] (block-level top-k path only)
     ggml_tensor * extra_mask  = nullptr; // F32 [ratio, n_tokens/n_stream, n_stream] 0 real / -inf padding (compact decode path only)
 
@@ -726,6 +736,15 @@ llama_model_qwen4exp::graph::qsa_sel llama_model_qwen4exp::graph::build_qsa_top_
             ggml_set_input(qsa->cell_blk);
         }
 
+        if (mctx_hyb->decode_pipelined() && n_stream == 1) {
+            qsa->strm = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
+            ggml_set_input(qsa->strm);
+            if (use_blk_cache) {
+                qsa->blk_strm = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
+                ggml_set_input(qsa->blk_strm);
+            }
+        }
+
         inp = qsa.get();
         res->add_input(std::move(qsa));
         qsa_inps.emplace((uint32_t) r, inp);
@@ -739,8 +758,28 @@ llama_model_qwen4exp::graph::qsa_sel llama_model_qwen4exp::graph::build_qsa_top_
     ggml_build_forward_expand(gf, mctx_idx->cpy_k(ctx0, k_raw, inp->k_idxs, il));
 
     // one key head, so rows are contiguous. get_k gives [idx_dim, n_head_kv, n_kv, n_stream].
-    ggml_tensor * k_all = mctx_idx->get_k(ctx0, il);
-    k_all = ggml_view_3d(ctx0, k_all, idx_dim, n_kv, n_stream, k_all->nb[2], k_all->nb[3], 0);
+    ggml_tensor * k_all = nullptr;
+    ggml_tensor * k_all_flat = nullptr; // stream-agnostic: [idx_dim, kv_size*n_stream_total], rows addressed as cell + strm*kv_size
+    ggml_tensor * strm_off_cells = nullptr; // F32 [1]: strm*kv_size
+
+    if (inp->strm) {
+        ggml_tensor * k4 = mctx_idx->get_k_all(ctx0, il);
+        const int64_t kv_size = mctx_idx->get_kv_size();
+        k_all_flat = ggml_view_2d(ctx0, k4, idx_dim, kv_size*k4->ne[3], k4->nb[2], 0);
+        strm_off_cells = ggml_scale(ctx0, ggml_cast(ctx0, inp->strm, GGML_TYPE_F32), (float) kv_size);
+    } else {
+        k_all = mctx_idx->get_k(ctx0, il);
+        k_all = ggml_view_3d(ctx0, k_all, idx_dim, n_kv, n_stream, k_all->nb[2], k_all->nb[3], 0);
+    }
+
+    // gather rows of the indexer cache by stream-local cell indices [n, n_stream] (n_stream == 1 on the flat path)
+    auto gather_cells = [&](ggml_tensor * cells) {
+        if (k_all_flat) {
+            ggml_tensor * flat = ggml_cast(ctx0, ggml_add(ctx0, ggml_cast(ctx0, cells, GGML_TYPE_F32), strm_off_cells), GGML_TYPE_I32);
+            return ggml_get_rows(ctx0, k_all_flat, ggml_reshape_1d(ctx0, flat, ggml_nelements(flat)));
+        }
+        return ggml_get_rows(ctx0, k_all, cells);
+    };
 
     ggml_tensor * pooled = nullptr;
 
@@ -749,7 +788,7 @@ llama_model_qwen4exp::graph::qsa_sel llama_model_qwen4exp::graph::build_qsa_top_
         // the scoring below then reads the cache, so nothing here is O(n_kv)
         const int64_t n_dirty = inp->dirty_cells->ne[0]/r;
 
-        ggml_tensor * members = ggml_get_rows(ctx0, k_all, inp->dirty_cells);
+        ggml_tensor * members = gather_cells(inp->dirty_cells);
         members = ggml_reshape_4d(ctx0, members, idx_dim, r, n_dirty, n_stream);
 
         ggml_tensor * fresh = nullptr;
@@ -791,15 +830,23 @@ llama_model_qwen4exp::graph::qsa_sel llama_model_qwen4exp::graph::build_qsa_top_
         ggml_build_forward_expand(gf, ggml_set_rows(ctx0, vstore2d, cells_f, inp->dirty_dst));
 
         // reserve ubatches carry null seq_id pointers; stream 0 sizes the worst case there
-        const uint32_t s0 = ubatch.seq_id[0] ? mctx_hyb->blk_stream0(ubatch.seq_id[0][0]) : 0;
+        if (inp->blk_strm) {
+            // stream-agnostic: rows blk_strm*size_blk + [0, n_blocks) of the flattened store (arange as a cumsum of ones)
+            ggml_tensor * ar = ggml_cumsum(ctx0, ggml_fill(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_blocks), 1.0f)); // 1..n_blocks
+            ggml_tensor * off = ggml_scale_bias(ctx0, ggml_cast(ctx0, inp->blk_strm, GGML_TYPE_F32), (float) size_blk, -1.0f); // strm*size_blk - 1
+            ggml_tensor * rows_idx = ggml_cast(ctx0, ggml_add(ctx0, ar, off), GGML_TYPE_I32);
+            pooled = ggml_reshape_3d(ctx0, ggml_get_rows(ctx0, store2d, rows_idx), idx_dim, n_blocks, n_stream);
+        } else {
+            const uint32_t s0 = ubatch.seq_id[0] ? mctx_hyb->blk_stream0(ubatch.seq_id[0][0]) : 0;
 
-        pooled = ggml_view_3d(ctx0, store, idx_dim, n_blocks, n_stream,
-                store->nb[1], store->nb[2], store->nb[2]*s0);
+            pooled = ggml_view_3d(ctx0, store, idx_dim, n_blocks, n_stream,
+                    store->nb[1], store->nb[2], store->nb[2]*s0);
+        }
         cb(pooled, "indexer_k", il);
     } else {
         // full recompute: gather, pool, norm and rope every block, every step
         // gathers per stream: blk_cells row s indexes stream s's own cells
-        ggml_tensor * members = ggml_get_rows(ctx0, k_all, inp->blk_cells);
+        ggml_tensor * members = gather_cells(inp->blk_cells);
         members = ggml_reshape_4d(ctx0, members, idx_dim, r, n_blocks, n_stream);
 
         // mean over the block members; r is small, so summing slices beats a transpose plus sum_rows
@@ -876,10 +923,18 @@ llama_model_qwen4exp::graph::qsa_sel llama_model_qwen4exp::graph::build_qsa_top_
         if (inp->dirty_cells) {
             // from the device-resident V tensor of the block cache (f32 -> i32)
             ggml_tensor * vstore = mctx_hyb->blk_v_storage(il);
-            const uint32_t s0 = ubatch.seq_id[0] ? mctx_hyb->blk_stream0(ubatch.seq_id[0][0]) : 0;
-            ggml_tensor * v_view = ggml_view_3d(ctx0, vstore, r, n_blocks, n_stream,
-                    vstore->nb[1], vstore->nb[2], vstore->nb[2]*s0);
-            sel = ggml_cast(ctx0, ggml_get_rows(ctx0, v_view, top_blk), GGML_TYPE_I32);
+            if (inp->blk_strm) {
+                const int64_t size_blk_v = vstore->ne[1];
+                ggml_tensor * vstore2d = ggml_reshape_2d(ctx0, vstore, r, size_blk_v*vstore->ne[2]);
+                ggml_tensor * off = ggml_scale(ctx0, ggml_cast(ctx0, inp->blk_strm, GGML_TYPE_F32), (float) size_blk_v);
+                ggml_tensor * tb = ggml_cast(ctx0, ggml_add(ctx0, ggml_cast(ctx0, top_blk, GGML_TYPE_F32), off), GGML_TYPE_I32);
+                sel = ggml_cast(ctx0, ggml_get_rows(ctx0, vstore2d, ggml_reshape_1d(ctx0, tb, ggml_nelements(tb))), GGML_TYPE_I32);
+            } else {
+                const uint32_t s0 = ubatch.seq_id[0] ? mctx_hyb->blk_stream0(ubatch.seq_id[0][0]) : 0;
+                ggml_tensor * v_view = ggml_view_3d(ctx0, vstore, r, n_blocks, n_stream,
+                        vstore->nb[1], vstore->nb[2], vstore->nb[2]*s0);
+                sel = ggml_cast(ctx0, ggml_get_rows(ctx0, v_view, top_blk), GGML_TYPE_I32);
+            }
         } else {
             ggml_tensor * blk_cells = ggml_reshape_3d(ctx0, inp->blk_cells, r, n_blocks, n_stream);
             sel = ggml_get_rows(ctx0, blk_cells, top_blk);                // I32 [r, n_sel*n_tps, n_stream]
@@ -1020,8 +1075,41 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa_compact(
         return sel_rows;
     };
 
-    ggml_tensor * k = gather(mctx_cur->get_k(ctx0, il), "k_compact");
-    ggml_tensor * v = gather(mctx_cur->get_v(ctx0, il), "v_compact");
+    ggml_tensor * k = nullptr;
+    ggml_tensor * v = nullptr;
+
+    if (inp->get_strm() && n_stream == 1) {
+        // stream-agnostic graph (LLAMA_DECODE_PIPELINE): gather from the flat all-stream cache with
+        // row = cell + s0*kv_size, so the same graph serves every stream and can be reused across them
+        const int64_t kv_size = mctx_cur->get_kv_size();
+
+        ggml_tensor * off = ggml_scale(ctx0, ggml_cast(ctx0, inp->get_strm(), GGML_TYPE_F32), (float) kv_size); // [1]
+        ggml_tensor * idx_flat = ggml_cast(ctx0, ggml_add(ctx0, ggml_cast(ctx0, idx, GGML_TYPE_F32), off), GGML_TYPE_I32);
+        idx_flat = ggml_reshape_1d(ctx0, idx_flat, n_w_pad);
+
+        auto gather_flat = [&](ggml_tensor * kv4, const char * name) {
+            GGML_ASSERT(kv4->nb[1] <= kv4->nb[2]); // not transposed
+            const int64_t n_embd_head = kv4->ne[0];
+            const int64_t n_head_kv   = kv4->ne[1];
+            GGML_ASSERT(kv4->ne[2] == kv_size);
+            GGML_ASSERT(kv4->nb[3] == kv4->nb[2]*kv_size);
+
+            ggml_tensor * kv2 = ggml_view_2d(ctx0, kv4, n_embd_head*n_head_kv, kv_size*kv4->ne[3], kv4->nb[2], 0);
+
+            ggml_tensor * sel_rows = ggml_get_rows(ctx0, kv2, idx_flat);  // F32 [n_embd_head*n_head_kv, n_w_pad]
+            sel_rows = ggml_reshape_4d(ctx0, sel_rows, n_embd_head, n_head_kv, n_w_pad, 1);
+            sel_rows = ggml_permute(ctx0, sel_rows, 0, 2, 1, 3);
+            sel_rows = ggml_cast(ctx0, sel_rows, GGML_TYPE_F16);
+            cb(sel_rows, name, il);
+            return sel_rows;
+        };
+
+        k = gather_flat(mctx_cur->get_k_all(ctx0, il), "k_compact");
+        v = gather_flat(mctx_cur->get_v_all(ctx0, il), "v_compact");
+    } else {
+        k = gather(mctx_cur->get_k(ctx0, il), "k_compact");
+        v = gather(mctx_cur->get_v(ctx0, il), "v_compact");
+    }
 
     // one query per stream: [n_embd_head, 1, n_head, n_stream]
     ggml_tensor * q = ggml_view_4d(ctx0, q_cur, q_cur->ne[0], 1, q_cur->ne[1], n_stream,
@@ -1570,12 +1658,20 @@ ggml_tensor * llama_model_qwen4exp::graph::build_conv_state_at(
                 conv_input->nb[1], conv_input->nb[2],
                 ggml_row_size(conv_input->type, s_idx));
 
-        ggml_tensor * dst = ggml_view_2d(ctx0, conv_states_all,
-                state_cols * channels, n_seqs,
-                conv_states_all->nb[1],
-                (slot * mem_size + kv_head) * row_size);
+        if (inp->rs_idx) {
+            // stream-agnostic graph: index-based write into this slot's region
+            ggml_tensor * slot_rows = ggml_view_2d(ctx0, conv_states_all, state_cols * channels, mem_size, conv_states_all->nb[1],
+                    (size_t) slot * mem_size * row_size);
+            ggml_tensor * src2d = ggml_reshape_2d(ctx0, ggml_cont(ctx0, tail), state_cols * channels, n_seqs);
+            ggml_build_forward_expand(gf, ggml_set_rows(ctx0, slot_rows, src2d, inp->rs_idx));
+        } else {
+            ggml_tensor * dst = ggml_view_2d(ctx0, conv_states_all,
+                    state_cols * channels, n_seqs,
+                    conv_states_all->nb[1],
+                    (slot * mem_size + kv_head) * row_size);
 
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, ggml_cont(ctx0, tail), dst));
+            ggml_build_forward_expand(gf, ggml_cpy(ctx0, ggml_cont(ctx0, tail), dst));
+        }
     }
 
     return conv_input;

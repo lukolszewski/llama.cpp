@@ -243,6 +243,10 @@ public:
     uint32_t      blk_stream0(llama_seq_id seq) const;
     bool          blk_available() const;
 
+    // stream-agnostic decode (LLAMA_DECODE_PIPELINE): every per-stream ubatch of a batch builds the same n_kv
+    void set_n_kv_min(uint32_t n);
+    void set_pipelined(bool v);
+
     void set_input_qsa_dirty(ggml_tensor * dirty_cells, ggml_tensor * dirty_pos,
                              ggml_tensor * dirty_dst, const llama_ubatch * ubatch, uint32_t ratio) const;
 
