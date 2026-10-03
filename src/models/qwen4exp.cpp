@@ -478,7 +478,7 @@ public:
 
     void set_input(const llama_ubatch * ubatch) override {
         mctx->get_idx()->set_input_k_idxs(k_idxs, ubatch);
-        mctx->set_input_qsa(cell_blk, blk_cells, blk_pos, bias, extra_cells, extra_mask, ubatch, ratio, blk_bias);
+        mctx->set_input_qsa(cell_blk, blk_cells, blk_pos, bias, extra_cells, extra_mask, ubatch, ratio, blk_bias, blk_idx, blk_add, q_idx, q_tail);
 
         if (dirty_cells) {
             mctx->set_input_qsa_dirty(dirty_cells, dirty_pos, dirty_dst, ubatch, ratio);
@@ -505,8 +505,10 @@ public:
         res &= cell_blk == nullptr || (cell_blk->ne[0] == n_kv && cell_blk->ne[1] == n_stream);
         res &= blk_cells == nullptr || blk_cells->ne[0] == (int64_t) ratio*n_blocks;
         res &= blk_pos == nullptr || blk_pos->ne[0] == 4*n_blocks*n_stream;
-        res &= bias->ne[0]      == (blk_bias ? n_blocks : n_kv);
-        res &= bias->ne[1]      == params.ubatch.n_tokens/n_stream;
+        res &= bias == nullptr || bias->ne[0] == (blk_bias ? n_blocks : n_kv);
+        res &= bias == nullptr || bias->ne[1] == params.ubatch.n_tokens/n_stream;
+        res &= blk_idx == nullptr || (blk_idx->ne[0] == n_blocks && blk_idx->ne[1] == n_stream);
+        res &= q_idx   == nullptr || (q_idx->ne[0] == params.ubatch.n_tokens/n_stream && q_idx->ne[1] == n_stream);
         res &= extra_cells == nullptr || extra_cells->ne[1] == params.ubatch.n_tokens/n_stream;
         res &= extra_mask  == nullptr || extra_mask->ne[1]  == params.ubatch.n_tokens/n_stream;
         res &= extra_mask  == nullptr || params.cparams.flash_attn;
@@ -527,6 +529,11 @@ public:
     ggml_tensor * blk_cells   = nullptr; // I32 [ratio*n_blocks, n_stream]
     ggml_tensor * blk_pos     = nullptr; // I32 [4*n_blocks*n_stream]
     ggml_tensor * bias        = nullptr; // F32 [n_blocks or n_kv, n_tokens/n_stream, n_stream]
+    // device-built block bias (replaces `bias` when set, see llama_memory_hybrid_idx::set_input_qsa)
+    ggml_tensor * blk_idx     = nullptr; // I32 [n_blocks, n_stream]
+    ggml_tensor * blk_add     = nullptr; // F32 [n_blocks, n_stream]
+    ggml_tensor * q_idx       = nullptr; // I32 [n_tokens/n_stream, n_stream]
+    ggml_tensor * q_tail      = nullptr; // I32 [n_tokens/n_stream, n_stream]
     ggml_tensor * extra_cells = nullptr; // I32 [ratio, n_tokens/n_stream, n_stream] (block-level top-k path only)
     ggml_tensor * extra_mask  = nullptr; // F32 [ratio, n_tokens/n_stream, n_stream] 0 real / -inf padding (compact decode path only)
 
@@ -541,6 +548,77 @@ public:
     // the per-cell half of the bias is the attention mask, so only the per-block half is uploaded
     const bool blk_bias;
 };
+
+bool llama_model_qwen4exp::graph::qsa_bias_on_device() {
+    static const bool enabled = getenv("LLAMA_QSA_BIAS_DEVICE") == nullptr || atoi(getenv("LLAMA_QSA_BIAS_DEVICE")) != 0;
+    return enabled;
+}
+
+// The block bias (F32 [n_blocks, n_tps, n_stream], 42 MB per 512-token ubatch at 82k) was a host input that the
+// scheduler copied to every device; derive it on each device instead from the per-block sequence index of its first
+// cell and the per-token sequence index / tail start:
+//   bias[b, q] = (idx_b > q ? -1e30 : 0) + (idx_b >= tail(q) ? 1e9 : 0) + add_b
+// absent/foreign blocks carry idx = NEVER (-> -1e30), the spare block idx = -1 and add = 1e9 (always the tail value).
+ggml_tensor * llama_model_qwen4exp::graph::qsa_bias_for_layer(llm_graph_input_qsa * inp, int il) {
+    if (inp->bias) {
+        return inp->bias;
+    }
+
+    ggml_backend_dev_t dev = model.dev_layer(il);
+    const auto key = std::make_pair(inp->ratio, dev);
+
+    auto it = qsa_bias_dev.find(key);
+    if (it != qsa_bias_dev.end()) {
+        return it->second;
+    }
+
+    ggml_backend_t backend = nullptr;
+    for (int i = 0; i < ggml_backend_sched_get_n_backends(sched); ++i) {
+        ggml_backend_t b = ggml_backend_sched_get_backend(sched, i);
+        if (ggml_backend_get_device(b) == dev) {
+            backend = b;
+            break;
+        }
+    }
+
+    auto pin = [&](ggml_tensor * t) {
+        if (backend) {
+            ggml_backend_sched_set_tensor_backend(sched, t, backend);
+        }
+        return t;
+    };
+
+    const int64_t n_blocks = inp->blk_idx->ne[0];
+    const int64_t n_stream = inp->blk_idx->ne[1];
+    const int64_t n_tps    = inp->q_idx->ne[0];
+
+    ggml_tensor * bi = pin(ggml_cast(ctx0, ggml_reshape_4d(ctx0, inp->blk_idx, n_blocks, 1,     1, n_stream), GGML_TYPE_F32));
+    ggml_tensor * ba = pin(ggml_cast(ctx0, ggml_reshape_4d(ctx0, inp->blk_add, n_blocks, 1,     1, n_stream), GGML_TYPE_F32));
+    ggml_tensor * qi = pin(ggml_cast(ctx0, ggml_reshape_4d(ctx0, inp->q_idx,   1,        n_tps, 1, n_stream), GGML_TYPE_F32));
+    ggml_tensor * qt = pin(ggml_cast(ctx0, ggml_reshape_4d(ctx0, inp->q_tail,  1,        n_tps, 1, n_stream), GGML_TYPE_F32));
+
+    // future (or absent) block: idx_b - q > 0
+    ggml_tensor * fut = pin(ggml_repeat_4d(ctx0, bi, n_blocks, n_tps, 1, n_stream));
+    fut = pin(ggml_sub_inplace(ctx0, fut, qi));
+    fut = pin(ggml_step_inplace(ctx0, fut));
+    fut = pin(ggml_scale_inplace(ctx0, fut, -1e30f));
+
+    // tail block: idx_b >= tail(q)  <=>  idx_b - tail(q) + 0.5 > 0
+    ggml_tensor * tail = pin(ggml_repeat_4d(ctx0, bi, n_blocks, n_tps, 1, n_stream));
+    tail = pin(ggml_sub_inplace(ctx0, tail, qt));
+    tail = pin(ggml_scale_bias_inplace(ctx0, tail, 1.0f, 0.5f));
+    tail = pin(ggml_step_inplace(ctx0, tail));
+    tail = pin(ggml_scale_inplace(ctx0, tail, 1e9f));
+
+    ggml_tensor * bias = pin(ggml_add_inplace(ctx0, fut, tail));
+    bias = pin(ggml_add_inplace(ctx0, bias, ba));                       // [n_blocks, 1, 1, n_stream] broadcast
+    bias = ggml_reshape_3d(ctx0, bias, n_blocks, n_tps, n_stream);
+    cb(bias, "indexer_blk_bias_dev", il);
+
+    qsa_bias_dev[key] = bias;
+
+    return bias;
+}
 
 llama_model_qwen4exp::graph::qsa_sel llama_model_qwen4exp::graph::build_qsa_top_k(
         const llama_memory_hybrid_idx_context * mctx_hyb,
@@ -585,9 +663,19 @@ llama_model_qwen4exp::graph::qsa_sel llama_model_qwen4exp::graph::build_qsa_top_
         const bool use_blk_cache = blk_bias && mctx_hyb->blk_available();
 
         qsa->k_idxs    = mctx_idx->build_input_k_idxs(ctx0, ubatch);
-        qsa->bias      = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, blk_bias ? n_blocks : n_kv, n_tps, n_stream);
-
-        ggml_set_input(qsa->bias);
+        if (blk_bias && qsa_bias_on_device()) {
+            qsa->blk_idx = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_blocks, n_stream);
+            qsa->blk_add = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_blocks, n_stream);
+            qsa->q_idx   = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_tps,    n_stream);
+            qsa->q_tail  = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_tps,    n_stream);
+            ggml_set_input(qsa->blk_idx);
+            ggml_set_input(qsa->blk_add);
+            ggml_set_input(qsa->q_idx);
+            ggml_set_input(qsa->q_tail);
+        } else {
+            qsa->bias = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, blk_bias ? n_blocks : n_kv, n_tps, n_stream);
+            ggml_set_input(qsa->bias);
+        }
 
         if (!use_blk_cache) {
             // with the device-side block cache the member cells live in its V tensor;
@@ -774,7 +862,8 @@ llama_model_qwen4exp::graph::qsa_sel llama_model_qwen4exp::graph::build_qsa_top_
         // the partially-visible tail block, so no mask add is needed before the top-k; any
         // over-selection (dead-block rows expand to cell 0) is neutralized by the mask add
         // in build_attn_qsa.
-        score = ggml_add(ctx0, score, inp->bias);
+        ggml_tensor * bias = qsa_bias_for_layer(inp, il);
+        score = ggml_add(ctx0, score, bias);
         cb(score, "indexer_score_biased", il);
 
         const int64_t n_sel = std::min<int64_t>(n_blocks, (width + r - 1)/r);
@@ -818,8 +907,8 @@ llama_model_qwen4exp::graph::qsa_sel llama_model_qwen4exp::graph::build_qsa_top_
             // f16), -inf -> -inf.
             GGML_ASSERT(n_tps == 1);
 
-            ggml_tensor * bias_v = ggml_view_3d(ctx0, inp->bias, 1, n_blocks, n_stream,
-                    inp->bias->nb[0], inp->bias->nb[2], 0);
+            ggml_tensor * bias_v = ggml_view_3d(ctx0, bias, 1, n_blocks, n_stream,
+                    bias->nb[0], bias->nb[2], 0);
             ggml_tensor * blk_mask = ggml_get_rows(ctx0, bias_v, top_blk);   // F32 [1, n_sel, n_stream]
             blk_mask = ggml_neg(ctx0, ggml_abs(ctx0, blk_mask));
             blk_mask = ggml_repeat_4d(ctx0, blk_mask, r, n_sel, n_stream, 1);

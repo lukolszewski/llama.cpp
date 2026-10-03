@@ -2441,6 +2441,11 @@ struct llama_model_qwen4exp : public llama_model_base {
         std::map<ggml_backend_dev_t, ggml_tensor *> kq_mask_dev;
         ggml_tensor * kq_mask_for_layer(llm_graph_input_attn_kv * inp, int il);
 
+        // device-built QSA block bias, one chain per (ratio, device)
+        std::map<std::pair<uint32_t, ggml_backend_dev_t>, ggml_tensor *> qsa_bias_dev;
+        static bool   qsa_bias_on_device();
+        ggml_tensor * qsa_bias_for_layer(llm_graph_input_qsa * inp, int il);
+
         // one conv history per cache tensor: delta-net and PLE each have their own
         ggml_tensor * build_conv_state_at(
              llm_graph_input_rs * inp,

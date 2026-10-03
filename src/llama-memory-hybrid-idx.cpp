@@ -669,21 +669,28 @@ void llama_memory_hybrid_idx::set_input_qsa(
         const llama_ubatch * ubatch,
         int64_t n_kv,
         uint32_t ratio,
-        bool blk_bias) const {
+        bool blk_bias,
+        ggml_tensor * blk_idx,
+        ggml_tensor * blk_add,
+        ggml_tensor * q_idx,
+        ggml_tensor * q_tail) const {
     GGML_ASSERT(ratio > 0);
     GGML_ASSERT(get_mem_idx() != nullptr);
     GGML_ASSERT(extra_mask == nullptr || extra_cells != nullptr);
+    GGML_ASSERT(bias != nullptr || (blk_bias && blk_idx && blk_add && q_idx && q_tail));
+    GGML_ASSERT(blk_idx == nullptr || (ggml_backend_buffer_is_host(blk_idx->buffer) && ggml_backend_buffer_is_host(blk_add->buffer) &&
+                                       ggml_backend_buffer_is_host(q_idx->buffer) && ggml_backend_buffer_is_host(q_tail->buffer)));
 
     GGML_ASSERT(blk_cells == nullptr || ggml_backend_buffer_is_host(blk_cells->buffer));
     GGML_ASSERT(blk_pos == nullptr || ggml_backend_buffer_is_host(blk_pos->buffer));
-    GGML_ASSERT(ggml_backend_buffer_is_host(bias->buffer));
+    GGML_ASSERT(bias == nullptr || ggml_backend_buffer_is_host(bias->buffer));
     GGML_ASSERT(cell_blk    == nullptr || ggml_backend_buffer_is_host(cell_blk->buffer));
     GGML_ASSERT(extra_cells == nullptr || ggml_backend_buffer_is_host(extra_cells->buffer));
     GGML_ASSERT(extra_mask  == nullptr || ggml_backend_buffer_is_host(extra_mask->buffer));
 
-    const int64_t n_ns     = bias->ne[2];            // streams in this ubatch
+    const int64_t n_ns     = bias ? bias->ne[2] : blk_idx->ne[1]; // streams in this ubatch
     const int64_t r        = ratio;
-    const int64_t n_blocks = blk_bias ? bias->ne[0] : blk_cells->ne[0]/r;
+    const int64_t n_blocks = blk_bias ? (bias ? bias->ne[0] : blk_idx->ne[0]) : blk_cells->ne[0]/r;
     const int64_t n_tokens = ubatch->n_tokens;
 
     GGML_ASSERT(n_tokens % n_ns == 0);
@@ -696,7 +703,11 @@ void llama_memory_hybrid_idx::set_input_qsa(
     int32_t * dst_cell_blk  = cell_blk    ? (int32_t *) cell_blk->data    : nullptr;
     int32_t * dst_blk_cells = blk_cells   ? (int32_t *) blk_cells->data   : nullptr;
     int32_t * dst_blk_pos   = blk_pos ? (int32_t *) blk_pos->data : nullptr;
-    float   * dst_bias      = (float   *) bias->data;
+    float   * dst_bias      = bias ? (float *) bias->data : nullptr;
+    int32_t * dst_blk_idx   = blk_idx ? (int32_t *) blk_idx->data : nullptr;
+    float   * dst_blk_add   = blk_add ? (float   *) blk_add->data : nullptr;
+    int32_t * dst_q_idx     = q_idx   ? (int32_t *) q_idx->data   : nullptr;
+    int32_t * dst_q_tail    = q_tail  ? (int32_t *) q_tail->data  : nullptr;
     int32_t * dst_extra     = extra_cells ? (int32_t *) extra_cells->data : nullptr;
     float   * dst_extra_mask = extra_mask ? (float *) extra_mask->data : nullptr;
 
@@ -746,6 +757,23 @@ void llama_memory_hybrid_idx::set_input_qsa(
             }
         }
 
+        // device-built block bias: the per-block half, the per-token half goes with the token below
+        if (dst_blk_idx) {
+            int32_t * cur_idx = dst_blk_idx + s*n_blocks;
+            float   * cur_add = dst_blk_add + s*n_blocks;
+
+            for (int64_t b = 0; b < n_blocks; ++b) {
+                const bool valid = b < sp.n_bid && cells.seq_has((uint32_t) sp.bid_cell[b], seq_of_stream);
+                cur_idx[b] = valid ? sp.bid_idx[b] : LLAMA_KQ_POS_NEVER;
+                cur_add[b] = 0.0f;
+            }
+
+            if (have_dead) {
+                cur_idx[dead_bid] = -1;      // never in the future, never counted as tail by index
+                cur_add[dead_bid] = 1e9f;    // the spare block carries the tail value
+            }
+        }
+
         for (int64_t ii = 0; ii < n_tps; ++ii) {
             const int64_t      i      = s*n_tps + ii;
             const llama_seq_id seq_id = ubatch->seq_id[i][0];
@@ -778,7 +806,12 @@ void llama_memory_hybrid_idx::set_input_qsa(
             // the tail is an incomplete block and is always visible, as in the reference
             const int64_t tail_start = (q + 1)/r*r;
 
-            if (blk_bias) {
+            if (dst_q_idx) {
+                dst_q_idx [i] = (int32_t) q;
+                dst_q_tail[i] = (int32_t) tail_start;
+            }
+
+            if (blk_bias && dst_bias) {
                 // a block sits wholly inside or outside the tail, so one value covers it
                 // the top-k here runs over blocks, so a fully-future block must be -inf: the
                 // attention mask is only added after the selection and cannot reclaim a
@@ -808,6 +841,9 @@ void llama_memory_hybrid_idx::set_input_qsa(
                     cur_blk_bias[dead_bid] = 1e9f;
                 }
 
+            }
+
+            if (blk_bias) {
                 if (dst_extra) {
                     // the spare block's blk_cells row is zero-filled, so the tail cells the
                     // reference always attends must ride separately. padded by repetition;
@@ -1069,12 +1105,16 @@ void llama_memory_hybrid_idx_context::set_input_qsa(
         ggml_tensor * extra_mask,
         const llama_ubatch * ubatch,
         uint32_t ratio,
-        bool blk_bias) const {
+        bool blk_bias,
+        ggml_tensor * blk_idx,
+        ggml_tensor * blk_add,
+        ggml_tensor * q_idx,
+        ggml_tensor * q_tail) const {
     GGML_ASSERT(mem != nullptr);
     GGML_ASSERT(get_idx() != nullptr);
 
     mem->set_input_qsa(cell_blk, blk_cells, blk_pos, bias, extra_cells, extra_mask, ubatch,
-            get_idx()->get_n_kv(), ratio, blk_bias);
+            get_idx()->get_n_kv(), ratio, blk_bias, blk_idx, blk_add, q_idx, q_tail);
 }
 
 const llama_memory_hybrid_idx::qsa_prep & llama_memory_hybrid_idx_context::qsa_prepare(

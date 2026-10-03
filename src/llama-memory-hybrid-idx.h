@@ -134,9 +134,15 @@ public:
     // the caller then adds the attention mask, the only part of the bias that varies within a block
     //   extra_cells I32 [ratio, n_tokens/ns, ns] the incomplete tail's cells, padded by repetition
     //   extra_mask  F32 [ratio, n_tokens/ns, ns] 0 for a real tail cell, -inf for the padding (optional)
+    // device-built block bias (optional, blk_bias only): instead of the F32 [n_blocks, n_tokens/ns, ns] bias the graph
+    // derives it per device from blk_idx I32 [n_blocks, ns] (sequence index of the block's first cell, NEVER when the
+    // block is absent/foreign, -1 for the spare block), blk_add F32 [n_blocks, ns] (1e9 for the spare block),
+    // q_idx / q_tail I32 [n_tokens/ns, ns] (the token's sequence index and its tail start); bias may then be nullptr
     void set_input_qsa(ggml_tensor * cell_blk, ggml_tensor * blk_cells, ggml_tensor * blk_pos,
                        ggml_tensor * bias, ggml_tensor * extra_cells, ggml_tensor * extra_mask,
-                       const llama_ubatch * ubatch, int64_t n_kv, uint32_t ratio, bool blk_bias) const;
+                       const llama_ubatch * ubatch, int64_t n_kv, uint32_t ratio, bool blk_bias,
+                       ggml_tensor * blk_idx = nullptr, ggml_tensor * blk_add = nullptr,
+                       ggml_tensor * q_idx = nullptr, ggml_tensor * q_tail = nullptr) const;
 
     // fills the dirty-block recompute inputs (member cells, rope positions, destination
     // rows in the flattened block-key cache) from the current qsa_prep
@@ -226,7 +232,9 @@ public:
 
     void set_input_qsa(ggml_tensor * cell_blk, ggml_tensor * blk_cells, ggml_tensor * blk_pos,
                        ggml_tensor * bias, ggml_tensor * extra_cells, ggml_tensor * extra_mask,
-                       const llama_ubatch * ubatch, uint32_t ratio, bool blk_bias) const;
+                       const llama_ubatch * ubatch, uint32_t ratio, bool blk_bias,
+                       ggml_tensor * blk_idx = nullptr, ggml_tensor * blk_add = nullptr,
+                       ggml_tensor * q_idx = nullptr, ggml_tensor * q_tail = nullptr) const;
 
     // block-key cache plumbing for the graph builder
     const llama_memory_hybrid_idx::qsa_prep & qsa_prepare(const llama_ubatch * ubatch, uint32_t ratio) const;
