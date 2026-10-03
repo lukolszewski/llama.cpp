@@ -1683,6 +1683,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
     // LLAMA_UBATCH_TRACE: where does the host block while issuing the splits (debug aid)
     static const bool sched_trace = getenv("LLAMA_UBATCH_TRACE") != nullptr;
+    static const bool stage_wait  = getenv("GGML_SCHED_STAGE_WAIT") != nullptr && atoi(getenv("GGML_SCHED_STAGE_WAIT")) != 0;
     std::string trace_line;
     const int64_t t_trace_start = sched_trace ? ggml_time_us() : 0;
 
@@ -1729,12 +1730,20 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 sched->stage_recorded[b][stage_copy] = false;
             }
             if (buf == nullptr || ggml_backend_buffer_get_size(buf) < stage_need[b]) {
+                // Grow geometrically. The staged inputs scale with n_kv, which grows on every prefill ubatch, so
+                // sizing the slot at exactly `need` made this free and re-allocate pinned host memory per ubatch -
+                // ggml_backend_buffer_free/alloc are cudaFreeHost/cudaHostAlloc, expensive and device-synchronizing.
+                // Doubling from 1 MiB bounds that to a handful of allocations for the lifetime of the scheduler.
+                size_t cap = buf ? ggml_backend_buffer_get_size(buf) : (size_t) (1u << 20);
+                while (cap < stage_need[b]) {
+                    cap *= 2;
+                }
                 ggml_backend_buffer_free(buf);
                 buf = nullptr;
                 ggml_backend_dev_t dev = ggml_backend_get_device(sched->backends[b]);
                 ggml_backend_buffer_type_t host_buft = dev ? ggml_backend_dev_host_buffer_type(dev) : nullptr;
                 if (host_buft) {
-                    buf = ggml_backend_buft_alloc_buffer(host_buft, std::max<size_t>(stage_need[b], 1u << 20));
+                    buf = ggml_backend_buft_alloc_buffer(host_buft, cap);
                 }
             }
             if (buf) {
@@ -1754,6 +1763,18 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         const size_t stage_size = stage_cap [split_backend_id];
         size_t &     stage_off  = stage_offs[split_backend_id];
         const size_t stage_off0 = stage_off;
+
+        // GGML_SCHED_STAGE_WAIT=1 (bisection aid): the device-side input slot (sched->cur_copy) only rotates in
+        // ggml_backend_sched_alloc_graph, so a REUSED graph has every in-flight ubatch writing slot 0. Staging
+        // dropped the wait that serialized that. Put it back without giving up the pinned async copies, to tell
+        // apart "the staging mechanics are unsafe" from "overlapping ubatches of a reused graph are unsafe".
+        if (stage_wait && stage_ptr != nullptr) {
+            if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
+            } else {
+                ggml_backend_synchronize(split_backend);
+            }
+        }
 
         int64_t     trace_max_us   = -1;
         const char * trace_max_name = "";
