@@ -240,6 +240,7 @@ struct server_batch {
 
 struct server_slot {
     int id;
+    int group = 0; // pipelined decode group (LLAMA_SERVER_GROUPS), see update_slots()
 
     // llama sequence id backing this slot. Starts equal to `id`; the server may later swap the
     // sequences of a busy and an idle slot so that the busy sequences stay contiguous (see
@@ -910,6 +911,23 @@ private:
 
     server_batch batch;
 
+    // LLAMA_SERVER_GROUPS=n (n > 1): the slots are split into n groups and update_slots() serves one group per call:
+    // it first samples the group's batch issued on the previous visit (whose results are now ready), then builds and
+    // issues the group's next batch WITHOUT waiting for it. The other groups' batches compute meanwhile, so the
+    // layer-split pipeline is never drained between rounds. Needs llama_output_slots_set() (one result region per
+    // in-flight batch) and the per-sequence pipelined decode (LLAMA_DECODE_PIPELINE=1) to pay off.
+    int n_groups  = 1;
+    int cur_group = 0;
+    bool decode_defer_sync = false; // the current decode() call must not synchronize (results consumed later)
+    struct pending_batch {
+        bool         active   = false;
+        server_batch parked;
+        llama_batch  view     = {};
+        int32_t      n_tokens = 0;
+        int32_t      out_slot = 0;
+    };
+    std::vector<pending_batch> pending;
+
     llama_model   * model_dft = nullptr;
     llama_context * ctx_dft   = nullptr;
 
@@ -1309,10 +1327,28 @@ private:
             return false;
         }
 
+        {
+            // pipelined decode groups (see the n_groups comment); off unless LLAMA_SERVER_GROUPS > 1
+            const char * env = getenv("LLAMA_SERVER_GROUPS");
+            n_groups = env ? std::max(1, atoi(env)) : 1;
+            if (n_groups > 1 && (ctx_dft != nullptr || params_base.n_parallel < 2)) {
+                SRV_WRN("%s", "LLAMA_SERVER_GROUPS ignored (needs n_parallel >= 2 and no speculative decoding)\n");
+                n_groups = 1;
+            }
+            if (n_groups > 1 && !llama_output_slots_set(ctx_tgt, 2*n_groups)) {
+                SRV_WRN("%s", "LLAMA_SERVER_GROUPS ignored (llama_output_slots_set failed)\n");
+                n_groups = 1;
+            }
+            if (n_groups > 1) {
+                SRV_INF("pipelined decode groups: %d (slot i -> group i %% %d)\n", n_groups, n_groups);
+            }
+        }
+
         for (int i = 0; i < params_base.n_parallel; i++) {
             server_slot & slot = slots[i];
 
             slot.id      = i;
+            slot.group   = n_groups > 1 ? i % n_groups : 0;
             slot.seq_id  = i;
             slot.ctx_tgt = ctx_tgt;
             slot.ctx_dft = ctx_dft;
@@ -1372,6 +1408,10 @@ private:
             const int32_t n_batch = llama_n_batch(ctx_tgt);
             const int32_t n_embd  = llama_model_n_embd_inp(model_tgt);
             batch.init(std::max(n_batch, params_base.n_parallel), n_embd);
+            pending.resize(n_groups);
+            for (auto & pb : pending) {
+                pb.parked.init(std::max(n_batch, params_base.n_parallel), n_embd);
+            }
         }
 
         if (params_base.cache_ram_mib != 0) {
@@ -3085,6 +3125,24 @@ private:
             }
         }
 
+        if (n_groups > 1) {
+            cur_group = (cur_group + 1) % n_groups;
+            auto & pb = pending[cur_group];
+            if (pb.active) {
+                // results of this group's previous batch: sample them now (waits only for that batch)
+                std::swap(batch, pb.parked);
+                llama_output_select(ctx_tgt, pb.out_slot);
+                try {
+                    scoped_timer t(t_post_decode, n_post_decode);
+                    post_decode(pb.n_tokens, 0, pb.view);
+                } catch (const std::exception & e) {
+                    SRV_ERR("post_decode() failed: %s\n", e.what());
+                    abort_all_slots("post_decode() failed: " + std::string(e.what()));
+                }
+                pb.active = false;
+            }
+        }
+
         try {
             scoped_timer t(t_pre_decode, n_pre_decode);
             pre_decode();
@@ -3121,6 +3179,10 @@ private:
         llama_batch batch_view;
         int32_t off_next = 0;
         int32_t n_batch = llama_n_batch(ctx_tgt);
+        // pipelined groups: a batch that fits one view and needs no embeddings is issued and parked; its results are
+        // sampled on this group's next visit, while the other groups' batches compute
+        const bool defer = n_groups > 1 && batch.size() > 0 && batch.size() <= n_batch &&
+            !(batch.slot_batched && batch.slot_batched->need_embd());
         for (int32_t off = 0; off < batch.size(); off = off_next) {
             const int32_t n_tokens = std::min(n_batch, batch.size() - off);
             try {
@@ -3128,7 +3190,19 @@ private:
                 // TODO @ngxson : maybe handle n_batch == 1 here instead of inside decode()
 
                 batch_view = batch.get_view(off, n_tokens);
+                decode_defer_sync = defer && off == 0 && n_tokens == batch.size();
                 bool ok = decode(n_batch, off, batch_view);
+                if (ok && decode_defer_sync) {
+                    decode_defer_sync = false;
+                    auto & pb = pending[cur_group];
+                    pb.n_tokens = n_tokens;
+                    pb.view     = batch_view;
+                    pb.out_slot = llama_output_slot(ctx_tgt);
+                    pb.active   = true;
+                    std::swap(batch, pb.parked);
+                    break;
+                }
+                decode_defer_sync = false;
 #ifdef DEBUG_TIMINGS
                 if (debug_timings_enabled()) {
                     llama_synchronize(ctx_tgt);
@@ -3228,7 +3302,11 @@ private:
         });
 
         // keep the busy sequences contiguous so that they share one ubatch
-        compact_seqs();
+        // (not with pipelined groups: another group's batch may be computing on the sequence being migrated,
+        // and per-sequence ubatches do not need contiguity anyway)
+        if (n_groups == 1) {
+            compact_seqs();
+        }
 
         // start populating the batch for this iteration
         batch.clear();
@@ -3242,6 +3320,9 @@ private:
         // determine which slots are generating and drafting
         iterate(slots, [&](server_slot & slot) {
             if (slot.state != SLOT_STATE_GENERATING) {
+                return;
+            }
+            if (n_groups > 1 && slot.group != cur_group) {
                 return;
             }
 
@@ -3382,6 +3463,9 @@ private:
             iterate(slots, [&](server_slot & slot) {
                 if (!add_ok || batch.size() >= n_batch) {
                     return; // batch is full, skip remaining slots
+                }
+                if (n_groups > 1 && slot.group != cur_group) {
+                    return;
                 }
 
                 if (!slot.is_processing()) {
@@ -3962,7 +4046,7 @@ private:
         int ret = 0;
         queue_tasks.yield_to_queue([&]() {
             ret = llama_decode(ctx_tgt, batch_view);
-            if (ret == 0 && has_output) {
+            if (ret == 0 && has_output && !decode_defer_sync) {
                 llama_synchronize(ctx_tgt);
             }
         });
@@ -4039,6 +4123,9 @@ private:
 
         // handle `n_cmpl > 1` tasks - when the main prompt is processed, activate all child tasks too
         for (auto & slot : slots) {
+            if (n_groups > 1 && slot.group != cur_group) {
+                continue;
+            }
             if (slot.state == SLOT_STATE_DONE_PROMPT && slot.task->is_parent()) {
                 std::vector<server_slot *> children;
                 for (auto & other : slots) {
@@ -4085,6 +4172,9 @@ private:
         };
 
         iterate(slots, [&](server_slot & slot) {
+            if (n_groups > 1 && slot.group != cur_group) {
+                return;
+            }
             // optionally send prompt processing progress
             if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_DONE_PROMPT) {
                 if (slot.task->params.stream && slot.task->params.return_progress) {
