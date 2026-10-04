@@ -773,6 +773,13 @@ static bool ggml_is_view_op(enum ggml_op op) {
 #define GGML_SCHED_MAX_COPIES 4
 #endif
 
+// staging slots for the asynchronous host-input copies (GGML_SCHED_STAGE_INPUTS); a slot is reused only once the
+// compute that consumed it has finished, so with several graphs queued on the devices (prefill chunks interleaved
+// with decode tokens) a ring as short as the graph copies makes the host wait for a compute that is still queued
+#ifndef GGML_SCHED_MAX_STAGE
+#define GGML_SCHED_MAX_STAGE 12
+#endif
+
 struct ggml_backend_sched_split {
     int backend_id;
     int i_start;
@@ -834,9 +841,10 @@ struct ggml_backend_sched {
     // host input is staged (stream-ordered copy) and hop copies wait for all of the destination's recorded events
     bool replanned;
     int  stage_copy;
-    ggml_backend_buffer_t stage_bufs[GGML_SCHED_MAX_BACKENDS][GGML_SCHED_MAX_COPIES];
-    ggml_backend_event_t  stage_events[GGML_SCHED_MAX_BACKENDS][GGML_SCHED_MAX_COPIES];
-    bool                  stage_recorded[GGML_SCHED_MAX_BACKENDS][GGML_SCHED_MAX_COPIES];
+    int  n_stage;                   // staging slots in use (GGML_SCHED_MAX_STAGE, or 1 without pipeline parallelism)
+    ggml_backend_buffer_t stage_bufs[GGML_SCHED_MAX_BACKENDS][GGML_SCHED_MAX_STAGE];
+    ggml_backend_event_t  stage_events[GGML_SCHED_MAX_BACKENDS][GGML_SCHED_MAX_STAGE];
+    bool                  stage_recorded[GGML_SCHED_MAX_BACKENDS][GGML_SCHED_MAX_STAGE];
 
     struct ggml_tensor ** graph_inputs;
     int n_graph_inputs;
@@ -1724,7 +1732,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     // staging slot of this graph compute (rotates per compute, independently of the graph's input copy slot)
     const int stage_copy = sched->stage_copy;
     if (stage_this) {
-        sched->stage_copy = (sched->stage_copy + 1) % sched->n_copies;
+        sched->stage_copy = (sched->stage_copy + 1) % sched->n_stage;
     }
     // Staging is per (backend, stage slot), NOT per split: one backend usually owns several splits of the same
     // graph (the CPU backend feeds the token embedding and the PLE rows, each device takes several node runs), and
@@ -1736,6 +1744,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     char * stage_base[GGML_SCHED_MAX_BACKENDS] = { nullptr };
     size_t stage_cap [GGML_SCHED_MAX_BACKENDS] = { 0 };
 
+    int64_t trace_stage_wait_us = 0, trace_stage_alloc_us = 0; size_t trace_stage_need = 0; int trace_stage_allocs = 0;
     if (stage_this) {
         for (int split_id = 0; split_id < sched->n_splits; split_id++) {
             struct ggml_backend_sched_split * split = &splits[split_id];
@@ -1759,11 +1768,18 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             ggml_backend_buffer_t & buf = sched->stage_bufs[b][stage_copy];
             // the slot was last read by the split that recorded its event (n_copies graphs ago); the wait also
             // makes the realloc below safe - no async copy can still be reading the old buffer
+            trace_stage_need += stage_need[b];
             if (sched->stage_recorded[b][stage_copy]) {
+                const int64_t t0 = sched_trace ? ggml_time_us() : 0;
                 ggml_backend_event_synchronize(sched->stage_events[b][stage_copy]);
                 sched->stage_recorded[b][stage_copy] = false;
+                if (sched_trace) { trace_stage_wait_us += ggml_time_us() - t0; }
             }
             if (buf == nullptr || ggml_backend_buffer_get_size(buf) < stage_need[b]) {
+                const int64_t t0 = sched_trace ? ggml_time_us() : 0;
+                trace_stage_allocs++;
+                GGML_LOG_WARN("%s: staging slot %d of %s grows to %zu bytes (this synchronizes the device; raise GGML_SCHED_STAGE_MB)\n",
+                        __func__, stage_copy, ggml_backend_name(sched->backends[b]), stage_need[b]);
                 // Grow geometrically. The staged inputs scale with n_kv, which grows on every prefill ubatch, so
                 // sizing the slot at exactly `need` made this free and re-allocate pinned host memory per ubatch -
                 // ggml_backend_buffer_free/alloc are cudaFreeHost/cudaHostAlloc, expensive and device-synchronizing.
@@ -1779,6 +1795,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 if (host_buft) {
                     buf = ggml_backend_buft_alloc_buffer(host_buft, cap);
                 }
+                if (sched_trace) { trace_stage_alloc_us += ggml_time_us() - t0; }
             }
             if (buf) {
                 stage_base[b] = (char *) ggml_backend_buffer_get_base(buf);
@@ -2071,8 +2088,9 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     }
 
     if (sched_trace) {
-        GGML_LOG_WARN("sched-trace: copy=%d n_splits=%d total=%lld us |%s\n", sched->cur_copy, sched->n_splits,
-                (long long) (ggml_time_us() - t_trace_start), trace_line.c_str());
+        GGML_LOG_WARN("sched-trace: copy=%d n_splits=%d total=%lld us staged=%d need=%zu wait=%lld alloc=%lld/%d |%s\n", sched->cur_copy, sched->n_splits,
+                (long long) (ggml_time_us() - t_trace_start), (int) stage_this, trace_stage_need, (long long) trace_stage_wait_us,
+                (long long) trace_stage_alloc_us, trace_stage_allocs, trace_line.c_str());
     }
 
     return GGML_STATUS_SUCCESS;
@@ -2147,7 +2165,32 @@ ggml_backend_sched_t ggml_backend_sched_new(
         if (sched->n_copies > 1) {
             for (int c = 0; c < sched->n_copies; c++) {
                 sched->events[b][c] = ggml_backend_event_new(backends[b]->device);
+            }
+            for (int c = 0; c < GGML_SCHED_MAX_STAGE; c++) {
                 sched->stage_events[b][c] = ggml_backend_event_new(backends[b]->device);
+            }
+        }
+    }
+    sched->n_stage = sched->n_copies > 1 ? GGML_SCHED_MAX_STAGE : 1;
+    memset(sched->stage_bufs, 0, sizeof(sched->stage_bufs));
+    if (sched->n_copies > 1) {
+        // pre-allocate the pinned staging slots now, while nothing is in flight: a cudaHostAlloc later waits for the
+        // devices to drain (measured 0.1-0.8 s each with prefill chunks queued). GGML_SCHED_STAGE_MB sets the slot
+        // size (default 16 MiB; a 512-token ubatch stages ~9 MiB on the first device); larger inputs fall back to the
+        // synchronous copy.
+        const char * env_mb = getenv("GGML_SCHED_STAGE_MB");
+        const size_t cap = (size_t) (env_mb ? std::max(1, atoi(env_mb)) : 16) << 20;
+        for (int b = 0; b < sched->n_backends; b++) {
+            if (sched->backends[b]->iface.set_tensor_async == NULL) {
+                continue;
+            }
+            ggml_backend_dev_t dev = ggml_backend_get_device(sched->backends[b]);
+            ggml_backend_buffer_type_t host_buft = dev ? ggml_backend_dev_host_buffer_type(dev) : nullptr;
+            if (!host_buft) {
+                continue;
+            }
+            for (int c = 0; c < sched->n_stage; c++) {
+                sched->stage_bufs[b][c] = ggml_backend_buft_alloc_buffer(host_buft, cap);
             }
         }
     }
@@ -2159,7 +2202,6 @@ ggml_backend_sched_t ggml_backend_sched_new(
     sched->stage_request = false;
     sched->replanned     = false;
     sched->stage_copy = 0;
-    memset(sched->stage_bufs, 0, sizeof(sched->stage_bufs));
     memset(sched->stage_recorded, 0, sizeof(sched->stage_recorded));
 
     sched->galloc = ggml_gallocr_new_n(sched->bufts, n_backends);
@@ -2177,6 +2219,8 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
     for (int b = 0; b < sched->n_backends; b++) {
         for (int c = 0; c < sched->n_copies; c++) {
             ggml_backend_event_free(sched->events[b][c]);
+        }
+        for (int c = 0; c < GGML_SCHED_MAX_STAGE; c++) {
             if (sched->n_copies > 1) {
                 ggml_backend_event_free(sched->stage_events[b][c]);
             }
