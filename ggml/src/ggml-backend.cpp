@@ -1768,7 +1768,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             ggml_backend_buffer_t & buf = sched->stage_bufs[b][stage_copy];
             // the slot was last read by the split that recorded its event (n_copies graphs ago); the wait also
             // makes the realloc below safe - no async copy can still be reading the old buffer
-            trace_stage_need += stage_need[b];
+            trace_stage_need = std::max(trace_stage_need, stage_need[b]); // largest per-backend need
             if (sched->stage_recorded[b][stage_copy]) {
                 const int64_t t0 = sched_trace ? ggml_time_us() : 0;
                 ggml_backend_event_synchronize(sched->stage_events[b][stage_copy]);
@@ -1889,7 +1889,12 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 // (the input-copy slot does not rotate) the source stream must wait for the destination's previous
                 // split, otherwise the next ubatch's hidden state lands while the destination still reads the previous
                 // one. The destination-side wait alone orders only the destination's own stream (a no-op for itself).
-                if (replanned) {
+                if (replanned && input->buffer && ggml_backend_buffer_is_host(input->buffer)) {
+                    // host-resident source that did not fit the staging slot: the copy below is a synchronous host ->
+                    // device memcpy outside the compute stream, and the destination slot may overlap anything the
+                    // previous graph still uses on this device - the device has to be idle
+                    ggml_backend_synchronize(split_backend);
+                } else if (replanned) {
                     // re-planned buffers: the destination copy slot may overlap anything the previous graph still
                     // uses on this device, so order the copy after every split this device has recorded
                     for (int c = 0; c < sched->n_copies; c++) {
