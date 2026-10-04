@@ -851,6 +851,10 @@ struct ggml_backend_sched {
     // the next compute's device-side input copies may overlap tensors the previous graph is still using, so every
     // host input is staged (stream-ordered copy) and hop copies wait for all of the destination's recorded events
     bool replanned;
+    // computes since the last re-plan: graphs of the previous plan may still be in flight for a while, and a fresh
+    // allocation without a re-plan (same layout) is not otherwise protected against them - its input slot can alias
+    // the old plan's live tensors. The safe paths stay on for GGML_SCHED_REPLAN_WINDOW computes (default 12).
+    int  n_computes_since_replan;
     int  stage_copy;
     int  n_stage;                   // staging slots in use (GGML_SCHED_MAX_STAGE, or 1 without pipeline parallelism)
     ggml_backend_buffer_t stage_bufs[GGML_SCHED_MAX_BACKENDS][GGML_SCHED_MAX_STAGE];
@@ -1705,6 +1709,7 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
             ggml_gallocr_reserve_n(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids);
         } else {
             sched->replanned = true;
+            sched->n_computes_since_replan = 0;
             ggml_gallocr_reserve_n_cb(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids,
                     ggml_backend_sched_sync_backends, sched);
         }
@@ -1737,8 +1742,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     // rotated in alloc_graph), so the synchronous copy's wait on events[b][cur_copy] is a wait on a compute n_copies ago
     // (free). Prefill ubatches rebuild every time and pay only the staging memcpy; decode ubatches reuse the graph
     // and need the staging to overlap. GGML_SCHED_STAGE_INPUTS=2 stages every compute (the previous behaviour).
-    const bool replanned = sched->replanned;
+    static const int replan_window = getenv("GGML_SCHED_REPLAN_WINDOW") ? atoi(getenv("GGML_SCHED_REPLAN_WINDOW")) : 12;
+    const bool replanned = sched->replanned || sched->n_computes_since_replan < replan_window;
     sched->replanned = false;
+    sched->n_computes_since_replan++;
     // bisection knobs for the non-draining re-plan (GGML_SCHED_REPLAN_NOSYNC=1):
     //   GGML_SCHED_REPLAN_DEV_SYNC=1  host-wait for each device before issuing its split of a re-planned graph
     //   GGML_SCHED_REPLAN_HOP_SYNC=1  host-wait for the destination before a hop copy of a re-planned graph
@@ -2232,6 +2239,7 @@ ggml_backend_sched_t ggml_backend_sched_new(
     sched->n_computes_since_alloc = 0;
     sched->stage_request = false;
     sched->replanned     = false;
+    sched->n_computes_since_replan = 1 << 20;
     sched->stage_copy = 0;
     memset(sched->stage_recorded, 0, sizeof(sched->stage_recorded));
 
