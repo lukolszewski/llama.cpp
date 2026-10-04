@@ -1685,9 +1685,12 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
         // buffer being freed while a kernel still reads it and (2) the synchronous input copies landing in memory
         // the previous graph still uses. (1) is handled by synchronizing lazily, only if a buffer must grow;
         // (2) by the `replanned` compute below (staged copies, hop copies waiting for all recorded events).
-        // GGML_SCHED_REPLAN_SYNC=1 restores the unconditional drain.
-        static const bool replan_sync = getenv("GGML_SCHED_REPLAN_SYNC") != nullptr && atoi(getenv("GGML_SCHED_REPLAN_SYNC")) != 0;
-        if (replan_sync || sched->n_copies == 1) {
+        // EXPERIMENTAL, off by default: GGML_SCHED_REPLAN_NOSYNC=1 enables the lazy path. With it a decoder whose graph
+        // is rebuilt right after a prefill ubatch produces degenerate text at depth (c5: 58k decoders + 200k prefill),
+        // although every host-initiated device write is ordered as described - the remaining hazard is not understood
+        // (see airun/plan-prefill-and-cache.md A). The unconditional drain is the safe default.
+        static const bool replan_nosync = getenv("GGML_SCHED_REPLAN_NOSYNC") != nullptr && atoi(getenv("GGML_SCHED_REPLAN_NOSYNC")) != 0;
+        if (!replan_nosync || sched->n_copies == 1) {
             ggml_backend_sched_sync_backends(sched);
             ggml_gallocr_reserve_n(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids);
         } else {
