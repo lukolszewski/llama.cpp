@@ -829,6 +829,10 @@ struct ggml_backend_sched {
     bool stage_always;              // GGML_SCHED_STAGE_INPUTS=2: stage every compute, not only reused graphs
     bool stage_request;             // set by the user per compute (ggml_backend_sched_set_stage_inputs); default false
     int  n_computes_since_alloc;    // 0 on the first compute after alloc_graph (fresh slot), >0 when the graph is reused
+    // the last alloc_graph re-planned the compute buffers (graph layout changed) WITHOUT draining the backends:
+    // the next compute's device-side input copies may overlap tensors the previous graph is still using, so every
+    // host input is staged (stream-ordered copy) and hop copies wait for all of the destination's recorded events
+    bool replanned;
     int  stage_copy;
     ggml_backend_buffer_t stage_bufs[GGML_SCHED_MAX_BACKENDS][GGML_SCHED_MAX_COPIES];
     ggml_backend_event_t  stage_events[GGML_SCHED_MAX_BACKENDS][GGML_SCHED_MAX_COPIES];
@@ -1610,6 +1614,13 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
     }
 }
 
+static void ggml_backend_sched_sync_backends(void * ud) {
+    ggml_backend_sched_t sched = (ggml_backend_sched_t) ud;
+    for (int i = 0; i < sched->n_backends; i++) {
+        ggml_backend_synchronize(sched->backends[i]);
+    }
+}
+
 static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
     bool backend_ids_changed = false;
     for (int i = 0; i < sched->graph.n_nodes; i++) {
@@ -1660,11 +1671,22 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
 
         // the re-allocation may cause the split inputs to be moved to a different address
         // synchronize without ggml_backend_sched_synchronize to avoid changing cur_copy
-        for (int i = 0; i < sched->n_backends; i++) {
-            ggml_backend_synchronize(sched->backends[i]);
+        // With pipeline parallelism this drain costs the whole in-flight graph (a 512-token prefill ubatch takes
+        // ~0.6 s to clear six GPUs), on every switch between graph shapes (prefill <-> decode). The stream order
+        // already protects tensors of consecutive graphs on the same device; what the drain really guards is (1) a
+        // buffer being freed while a kernel still reads it and (2) the synchronous input copies landing in memory
+        // the previous graph still uses. (1) is handled by synchronizing lazily, only if a buffer must grow;
+        // (2) by the `replanned` compute below (staged copies, hop copies waiting for all recorded events).
+        // GGML_SCHED_REPLAN_SYNC=1 restores the unconditional drain.
+        static const bool replan_sync = getenv("GGML_SCHED_REPLAN_SYNC") != nullptr && atoi(getenv("GGML_SCHED_REPLAN_SYNC")) != 0;
+        if (replan_sync || sched->n_copies == 1) {
+            ggml_backend_sched_sync_backends(sched);
+            ggml_gallocr_reserve_n(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids);
+        } else {
+            sched->replanned = true;
+            ggml_gallocr_reserve_n_cb(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids,
+                    ggml_backend_sched_sync_backends, sched);
         }
-
-        ggml_gallocr_reserve_n(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids);
         if (!ggml_gallocr_alloc_graph(sched->galloc, &sched->graph)) {
             GGML_LOG_ERROR("%s: failed to allocate graph\n", __func__);
             return false;
@@ -1694,7 +1716,9 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     // rotated in alloc_graph), so the synchronous copy's wait on events[b][cur_copy] is a wait on a compute n_copies ago
     // (free). Prefill ubatches rebuild every time and pay only the staging memcpy; decode ubatches reuse the graph
     // and need the staging to overlap. GGML_SCHED_STAGE_INPUTS=2 stages every compute (the previous behaviour).
-    const bool stage_this = sched->stage_inputs && (sched->stage_always || (sched->stage_request && sched->n_computes_since_alloc > 0));
+    const bool replanned = sched->replanned;
+    sched->replanned = false;
+    const bool stage_this = sched->stage_inputs && (sched->stage_always || replanned || (sched->stage_request && sched->n_computes_since_alloc > 0));
     sched->n_computes_since_alloc++;
 
     // staging slot of this graph compute (rotates per compute, independently of the graph's input copy slot)
@@ -1819,7 +1843,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 } else {
                     trace_kind = 'S';
                     // inputs from the user must be copied immediately to prevent the user overwriting the data before the copy is done
-                    if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                    if (replanned) {
+                        // the copy slot may overlap what the previous graph still uses: wait for the whole device
+                        ggml_backend_synchronize(split_backend);
+                    } else if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                         ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
                     } else {
                         ggml_backend_synchronize(split_backend);
@@ -1845,7 +1872,23 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 // (the input-copy slot does not rotate) the source stream must wait for the destination's previous
                 // split, otherwise the next ubatch's hidden state lands while the destination still reads the previous
                 // one. The destination-side wait alone orders only the destination's own stream (a no-op for itself).
-                if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                if (replanned) {
+                    // re-planned buffers: the destination copy slot may overlap anything the previous graph still
+                    // uses on this device, so order the copy after every split this device has recorded
+                    for (int c = 0; c < sched->n_copies; c++) {
+                        ggml_backend_event_t ev = sched->events[split_backend_id][c];
+                        if (ev == NULL) {
+                            continue;
+                        }
+                        ggml_backend_event_wait(split_backend, ev);
+                        if (input_backend != split_backend && input_backend->iface.event_wait != NULL) {
+                            ggml_backend_event_wait(input_backend, ev);
+                        }
+                    }
+                    if (input_backend != split_backend && input_backend->iface.event_wait == NULL) {
+                        ggml_backend_synchronize(split_backend);
+                    }
+                } else if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                     ggml_backend_event_wait(split_backend, sched->events[split_backend_id][sched->cur_copy]);
                     if (input_backend != split_backend && input_backend->iface.event_wait != NULL &&
                             getenv("GGML_SCHED_NO_HOP_WAIT") == nullptr) {
@@ -2114,6 +2157,7 @@ ggml_backend_sched_t ggml_backend_sched_new(
     sched->stage_always = getenv("GGML_SCHED_STAGE_INPUTS") != nullptr && atoi(getenv("GGML_SCHED_STAGE_INPUTS")) == 2;
     sched->n_computes_since_alloc = 0;
     sched->stage_request = false;
+    sched->replanned     = false;
     sched->stage_copy = 0;
     memset(sched->stage_bufs, 0, sizeof(sched->stage_bufs));
     memset(sched->stage_recorded, 0, sizeof(sched->stage_recorded));
