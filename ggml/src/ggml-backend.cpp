@@ -334,6 +334,17 @@ void ggml_backend_tensor_get_2d_async(ggml_backend_t backend, const struct ggml_
 }
 
 void ggml_backend_tensor_set(struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+    // LLAMA_UBATCH_TRACE: report synchronous writes into non-host buffers (unordered against the compute streams)
+    {
+        static const bool trace = getenv("LLAMA_UBATCH_TRACE") != nullptr;
+        static int n_reported = 0;
+        ggml_backend_buffer_t b = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+        if (trace && b && !ggml_backend_buffer_is_host(b) && ggml_backend_buffer_get_usage(b) != GGML_BACKEND_BUFFER_USAGE_WEIGHTS && n_reported < 60) {
+            n_reported++;
+            GGML_LOG_WARN("tensor_set-device: '%s' op=%s %zu bytes into %s (usage %d)\n", tensor->name, ggml_op_name(tensor->op), size,
+                    ggml_backend_buffer_name(b), (int) ggml_backend_buffer_get_usage(b));
+        }
+    }
     GGML_ASSERT(tensor);
     ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
     GGML_ASSERT(buf != NULL && "tensor buffer not set");
@@ -1685,12 +1696,11 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
         // buffer being freed while a kernel still reads it and (2) the synchronous input copies landing in memory
         // the previous graph still uses. (1) is handled by synchronizing lazily, only if a buffer must grow;
         // (2) by the `replanned` compute below (staged copies, hop copies waiting for all recorded events).
-        // EXPERIMENTAL, off by default: GGML_SCHED_REPLAN_NOSYNC=1 enables the lazy path. With it a decoder whose graph
-        // is rebuilt right after a prefill ubatch produces degenerate text at depth (c5: 58k decoders + 200k prefill),
-        // although every host-initiated device write is ordered as described - the remaining hazard is not understood
-        // (see airun/plan-prefill-and-cache.md A). The unconditional drain is the safe default.
-        static const bool replan_nosync = getenv("GGML_SCHED_REPLAN_NOSYNC") != nullptr && atoi(getenv("GGML_SCHED_REPLAN_NOSYNC")) != 0;
-        if (!replan_nosync || sched->n_copies == 1) {
+        // The remaining hazard was the user's asynchronous output read-outs (ggml_backend_tensor_get_async after the
+        // compute), which the per-backend events did not cover: ggml_backend_sched_record_events() closes it.
+        // GGML_SCHED_REPLAN_SYNC=1 restores the unconditional drain.
+        static const bool replan_sync = getenv("GGML_SCHED_REPLAN_SYNC") != nullptr && atoi(getenv("GGML_SCHED_REPLAN_SYNC")) != 0;
+        if (replan_sync || sched->n_copies == 1) {
             ggml_backend_sched_sync_backends(sched);
             ggml_gallocr_reserve_n(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids);
         } else {
@@ -1729,7 +1739,14 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     // and need the staging to overlap. GGML_SCHED_STAGE_INPUTS=2 stages every compute (the previous behaviour).
     const bool replanned = sched->replanned;
     sched->replanned = false;
-    const bool stage_this = sched->stage_inputs && (sched->stage_always || replanned || (sched->stage_request && sched->n_computes_since_alloc > 0));
+    // bisection knobs for the non-draining re-plan (GGML_SCHED_REPLAN_NOSYNC=1):
+    //   GGML_SCHED_REPLAN_DEV_SYNC=1  host-wait for each device before issuing its split of a re-planned graph
+    //   GGML_SCHED_REPLAN_HOP_SYNC=1  host-wait for the destination before a hop copy of a re-planned graph
+    //   GGML_SCHED_REPLAN_NOSTAGE=1   do not force staging for a re-planned graph (synchronous copies after a device wait)
+    static const bool replan_dev_sync = getenv("GGML_SCHED_REPLAN_DEV_SYNC") != nullptr && atoi(getenv("GGML_SCHED_REPLAN_DEV_SYNC")) != 0;
+    static const bool replan_hop_sync = getenv("GGML_SCHED_REPLAN_HOP_SYNC") != nullptr && atoi(getenv("GGML_SCHED_REPLAN_HOP_SYNC")) != 0;
+    static const bool replan_nostage  = getenv("GGML_SCHED_REPLAN_NOSTAGE")  != nullptr && atoi(getenv("GGML_SCHED_REPLAN_NOSTAGE"))  != 0;
+    const bool stage_this = sched->stage_inputs && (sched->stage_always || (replanned && !replan_nostage) || (sched->stage_request && sched->n_computes_since_alloc > 0));
     sched->n_computes_since_alloc++;
 
     // staging slot of this graph compute (rotates per compute, independently of the graph's input copy slot)
@@ -1844,6 +1861,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             }
         }
 
+        if (replanned && replan_dev_sync) {
+            ggml_backend_synchronize(split_backend);
+        }
+
         // copy the input tensors to the split backend
         for (int input_id = 0; input_id < split->n_inputs; input_id++) {
             ggml_backend_t input_backend = ggml_backend_sched_get_tensor_backend(sched, split->inputs[input_id]);
@@ -1896,6 +1917,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     // host-resident source that did not fit the staging slot: the copy below is a synchronous host ->
                     // device memcpy outside the compute stream, and the destination slot may overlap anything the
                     // previous graph still uses on this device - the device has to be idle
+                    ggml_backend_synchronize(split_backend);
+                } else if (replanned && replan_hop_sync) {
                     ggml_backend_synchronize(split_backend);
                 } else if (replanned) {
                     // re-planned buffers: the destination copy slot may overlap anything the previous graph still
@@ -2337,6 +2360,18 @@ enum ggml_status ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sch
     }
 
     return ggml_backend_sched_compute_splits(sched);
+}
+
+void ggml_backend_sched_record_events(ggml_backend_sched_t sched) {
+    GGML_ASSERT(sched);
+    if (sched->n_copies <= 1) {
+        return;
+    }
+    for (int b = 0; b < sched->n_backends; b++) {
+        if (sched->events[b][sched->cur_copy] != NULL) {
+            ggml_backend_event_record(sched->events[b][sched->cur_copy], sched->backends[b]);
+        }
+    }
 }
 
 void ggml_backend_sched_synchronize(ggml_backend_sched_t sched) {

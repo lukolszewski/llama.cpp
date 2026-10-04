@@ -1661,6 +1661,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
 
         ggml_backend_tensor_get_async(backend_res, t_logits, logits.data, 0, n_tokens*n_vocab*sizeof(float));
     }
+    ggml_backend_sched_record_events(sched.get());
 
     // extract embeddings
     if (embd.data && t_embd) {
@@ -2161,6 +2162,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
             copy_tensor_async_rows(res->t_candidates,     sampling.candidates, stride, n_outputs_prev, sched.get(), &sampling.candidates_count);
         }
 
+        // the output read-outs above are asynchronous on the output backends' streams: let the scheduler's completion
+        // events cover them, so the next graph's cross-device input copies cannot land on these tensors first
+        ggml_backend_sched_record_events(sched.get());
+
         n_outputs_prev += n_outputs;
         n_tokens_prev  += ubatch.n_tokens;
     } while (mctx->next());
@@ -2437,6 +2442,7 @@ void llama_context::extract_layer_inputs(const llm_graph_result * res, size_t to
         GGML_ASSERT(backend != nullptr);
         ggml_backend_tensor_get_async(backend, t, embd_layer_inp[il].data + dst_offset, 0, nbytes);
     }
+    ggml_backend_sched_record_events(sched.get());
 }
 
 void llama_context::output_reorder() {
