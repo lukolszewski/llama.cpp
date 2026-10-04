@@ -855,6 +855,11 @@ struct ggml_backend_sched {
     // allocation without a re-plan (same layout) is not otherwise protected against them - its input slot can alias
     // the old plan's live tensors. The safe paths stay on for GGML_SCHED_REPLAN_WINDOW computes (default 12).
     int  n_computes_since_replan;
+    // plan epochs: which compute-buffer plan recorded each completion event. A compute must order itself after every
+    // in-flight compute of a DIFFERENT plan (their live tensors may alias its input slots) but not after same-plan
+    // computes (distinct tensors), so the pipelining between consecutive ubatches of one plan is kept.
+    int  plan_epoch;
+    int  event_plan[GGML_SCHED_MAX_BACKENDS][GGML_SCHED_MAX_COPIES];
     int  stage_copy;
     int  n_stage;                   // staging slots in use (GGML_SCHED_MAX_STAGE, or 1 without pipeline parallelism)
     ggml_backend_buffer_t stage_bufs[GGML_SCHED_MAX_BACKENDS][GGML_SCHED_MAX_STAGE];
@@ -1710,6 +1715,7 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
         } else {
             sched->replanned = true;
             sched->n_computes_since_replan = 0;
+            sched->plan_epoch++;
             ggml_gallocr_reserve_n_cb(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids,
                     ggml_backend_sched_sync_backends, sched);
         }
@@ -1742,8 +1748,19 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     // rotated in alloc_graph), so the synchronous copy's wait on events[b][cur_copy] is a wait on a compute n_copies ago
     // (free). Prefill ubatches rebuild every time and pay only the staging memcpy; decode ubatches reuse the graph
     // and need the staging to overlap. GGML_SCHED_STAGE_INPUTS=2 stages every compute (the previous behaviour).
-    static const int replan_window = getenv("GGML_SCHED_REPLAN_WINDOW") ? atoi(getenv("GGML_SCHED_REPLAN_WINDOW")) : 12;
-    const bool replanned = sched->replanned || sched->n_computes_since_replan < replan_window;
+    static const int replan_window = getenv("GGML_SCHED_REPLAN_WINDOW") ? atoi(getenv("GGML_SCHED_REPLAN_WINDOW")) : 0;
+    // per backend: are there completion events of computes with another plan (possibly still in flight)?
+    bool other_plan[GGML_SCHED_MAX_BACKENDS] = { false };
+    bool any_other_plan = false;
+    for (int b = 0; b < sched->n_backends; b++) {
+        for (int c = 0; c < sched->n_copies; c++) {
+            if (sched->events[b][c] != NULL && sched->event_plan[b][c] != 0 && sched->event_plan[b][c] != sched->plan_epoch) {
+                other_plan[b] = true;
+                any_other_plan = true;
+            }
+        }
+    }
+    const bool replanned = sched->replanned || any_other_plan || sched->n_computes_since_replan < replan_window;
     sched->replanned = false;
     sched->n_computes_since_replan++;
     // bisection knobs for the non-draining re-plan (GGML_SCHED_REPLAN_NOSYNC=1):
@@ -1892,8 +1909,21 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     trace_kind = 'S';
                     // inputs from the user must be copied immediately to prevent the user overwriting the data before the copy is done
                     if (replanned) {
-                        // the copy slot may overlap what the previous graph still uses: wait for the whole device
-                        ggml_backend_synchronize(split_backend);
+                        // the copy slot may overlap what computes of another plan still use on this device: wait for them
+                        bool waited_own = false;
+                        for (int c = 0; c < sched->n_copies; c++) {
+                            ggml_backend_event_t ev = sched->events[split_backend_id][c];
+                            if (ev == NULL) {
+                                continue;
+                            }
+                            if (c == sched->cur_copy || sched->event_plan[split_backend_id][c] != sched->plan_epoch) {
+                                ggml_backend_event_synchronize(ev);
+                                waited_own = waited_own || c == sched->cur_copy;
+                            }
+                        }
+                        if (!waited_own && sched->events[split_backend_id][sched->cur_copy] == NULL) {
+                            ggml_backend_synchronize(split_backend);
+                        }
                     } else if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                         ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
                     } else {
@@ -1922,17 +1952,26 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 // one. The destination-side wait alone orders only the destination's own stream (a no-op for itself).
                 if (replanned && input->buffer && ggml_backend_buffer_is_host(input->buffer)) {
                     // host-resident source that did not fit the staging slot: the copy below is a synchronous host ->
-                    // device memcpy outside the compute stream, and the destination slot may overlap anything the
-                    // previous graph still uses on this device - the device has to be idle
-                    ggml_backend_synchronize(split_backend);
+                    // device memcpy outside the compute stream; wait (host side) for the computes of other plans and
+                    // for the slot's previous user
+                    for (int c = 0; c < sched->n_copies; c++) {
+                        ggml_backend_event_t ev = sched->events[split_backend_id][c];
+                        if (ev != NULL && (c == sched->cur_copy || sched->event_plan[split_backend_id][c] != sched->plan_epoch)) {
+                            ggml_backend_event_synchronize(ev);
+                        }
+                    }
                 } else if (replanned && replan_hop_sync) {
                     ggml_backend_synchronize(split_backend);
                 } else if (replanned) {
-                    // re-planned buffers: the destination copy slot may overlap anything the previous graph still
-                    // uses on this device, so order the copy after every split this device has recorded
+                    // re-planned buffers: the destination copy slot may overlap live tensors of computes with another
+                    // plan, so order the copy after those (and after the slot's previous user), not after same-plan
+                    // computes - that keeps consecutive ubatches of one plan pipelined
                     for (int c = 0; c < sched->n_copies; c++) {
                         ggml_backend_event_t ev = sched->events[split_backend_id][c];
                         if (ev == NULL) {
+                            continue;
+                        }
+                        if (c != sched->cur_copy && sched->event_plan[split_backend_id][c] == sched->plan_epoch) {
                             continue;
                         }
                         ggml_backend_event_wait(split_backend, ev);
@@ -2108,6 +2147,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         // record the event of this split
         if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
             ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy], split_backend);
+            sched->event_plan[split_backend_id][sched->cur_copy] = sched->plan_epoch;
         }
         if (stage_off > stage_off0) {
             ggml_backend_event_record(sched->stage_events[split_backend_id][stage_copy], split_backend);
@@ -2240,6 +2280,8 @@ ggml_backend_sched_t ggml_backend_sched_new(
     sched->stage_request = false;
     sched->replanned     = false;
     sched->n_computes_since_replan = 1 << 20;
+    sched->plan_epoch = 1;
+    memset(sched->event_plan, 0, sizeof(sched->event_plan));
     sched->stage_copy = 0;
     memset(sched->stage_recorded, 0, sizeof(sched->stage_recorded));
 
