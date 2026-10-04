@@ -147,6 +147,22 @@ struct server_batch {
         }
     }
 
+    // member-wise swap: std::swap would move-construct a temporary whose destructor frees the llama_batch arrays
+    // that the other object now owns (the llama_batch is a plain struct, copied not moved)
+    void swap(server_batch & o) {
+        std::swap(batch,             o.batch);
+        std::swap(batch_rendered,    o.batch_rendered);
+        std::swap(tokens,            o.tokens);
+        std::swap(n_tokens_alloc,    o.n_tokens_alloc);
+        std::swap(n_embd,            o.n_embd);
+        std::swap(slot_batched,      o.slot_batched);
+        std::swap(has_embd,          o.has_embd);
+        std::swap(tokens_ptr,        o.tokens_ptr);
+        std::swap(embd,              o.embd);
+        std::swap(alora_scale,       o.alora_scale);
+        std::swap(alora_disabled_id, o.alora_disabled_id);
+    }
+
     void init(int32_t n_tokens_alloc, int32_t n_embd) {
         this->n_tokens_alloc = n_tokens_alloc;
         this->n_embd = n_embd;
@@ -3130,7 +3146,7 @@ private:
             auto & pb = pending[cur_group];
             if (pb.active) {
                 // results of this group's previous batch: sample them now (waits only for that batch)
-                std::swap(batch, pb.parked);
+                batch.swap(pb.parked);
                 llama_output_select(ctx_tgt, pb.out_slot);
                 try {
                     scoped_timer t(t_post_decode, n_post_decode);
@@ -3199,7 +3215,7 @@ private:
                     pb.view     = batch_view;
                     pb.out_slot = llama_output_slot(ctx_tgt);
                     pb.active   = true;
-                    std::swap(batch, pb.parked);
+                    batch.swap(pb.parked);
                     break;
                 }
                 decode_defer_sync = false;
