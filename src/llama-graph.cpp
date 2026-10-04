@@ -56,8 +56,9 @@ static ggml_tensor * build_attn_inp_kq_mask(
 // M-RoPE models carry 4 position components for every ubatch; text tokens have y == x == t, image tokens share one t
 // and differ in (y, x) with a raster-order tie rule in the host mask. The 1-D rule below is exact for text-only ubatches.
 bool llm_graph_decode_pipeline() {
-    static const bool enabled = getenv("LLAMA_DECODE_PIPELINE") != nullptr && atoi(getenv("LLAMA_DECODE_PIPELINE")) != 0;
-    return enabled;
+    // read live (not static): the server raises the level after the warmup decode
+    const char * env = getenv("LLAMA_DECODE_PIPELINE");
+    return env != nullptr && atoi(env) != 0;
 }
 
 static bool ubatch_pos_is_1d(const llama_ubatch & ubatch) {
