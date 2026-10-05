@@ -49,6 +49,18 @@ jobs:
         env:
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
+          # llama.cpp-multigpu fork guard.
+          # This repository is a downstream fork whose `master` branch only mirrors upstream
+          # llama.cpp. Mirroring upstream must never mint GitHub Releases here, and downstream
+          # releases come exclusively from the patched branch through
+          # .github/workflows/multigpu-release.yml. Turning this off also stops the upstream release
+          # matrix from consuming metered Windows/macOS runner minutes on the fork.
+          if [[ "${{ github.repository }}" != "ggml-org/llama.cpp" ]]; then
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            echo "::notice::fork detected - upstream release pipeline disabled; see multigpu-release.yml"
+            exit 0
+          fi
+
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "should_release=true" >> $GITHUB_OUTPUT
           elif [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/master" ]]; then
