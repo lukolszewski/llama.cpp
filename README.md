@@ -5,8 +5,8 @@
 This repository exists only while these workloads perform materially better here than in upstream
 [`llama.cpp`](https://github.com/ggml-org/llama.cpp). The intended end state is that upstream
 implements equivalent or better fixes, at which point this repository has succeeded, becomes
-unnecessary, and gets archived. **Archiving this repo because upstream caught up is the goal, not a
-failure.** If your workload is not the one described below, use upstream llama.cpp.
+unnecessary, and gets archived. **Archiving this repo because upstream caught up is the goal.** 
+If your workload is not the one described below, use upstream llama.cpp.
 
 `llama.cpp-multigpu` is an experimental downstream branch of llama.cpp carrying a targeted set of
 performance patches for **Qwen3.8-Flash-Next** on **consumer multi-GPU systems**, particularly
