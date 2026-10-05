@@ -51,8 +51,9 @@ Manual equivalent, step by step:
 7. **Delete what upstream made unnecessary.** For any patch whose upstream equivalent landed, follow
    [patches.md#removal-criteria](patches.md#removal-criteria) and note the drop. Deleting a patch is
    the normal direction of progress here.
-8. **Release** only after 4-7: push a `multigpu-YYYYMMDD` tag, or let the nightly refresh
-   `multigpu-latest`.
+8. **Release** only after 4-7: push an annotated `multigpu-YYYYMMDD` tag (there is no nightly or rolling
+   release). Rerun `scripts/multigpu/disable-foreign-workflows.sh` after the sync: GitHub re-registers
+   upstream's workflows from the default branch.
 
 ## Detecting that a patch is no longer needed
 

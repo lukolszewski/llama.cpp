@@ -62,6 +62,11 @@ with the groups.
 | 46 | `7c29e21b8` | 2026-10-05 | server | server: acceptance gate for speculative drafts | `LLAMA_SERVER_SPEC_MIN_ACCEPT` | — |
 | 47 | `e4054f726` | 2026-10-05 | llama | llama: portable std::max in output_reserve (gcc 13 rejects the explicit-template brace-list form) | — | — |
 
+**Architecture coverage is build configuration, not validation.** Release archives are compiled for
+several CUDA architectures (see [builds.md](builds.md)); the patches were developed and are runtime-
+validated on `sm_86` (RTX 3090) only. A patch that compiles for `sm_70` or `sm_120a` has not thereby been
+shown to help, or to be correct, there.
+
 ## Runtime switches, with defaults read from the code
 
 The whole patchset is selected at runtime, which means **one build carries all of it** — there are no

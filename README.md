@@ -19,7 +19,7 @@ new inference runtime, model format, or ecosystem.
 | Upstream | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) — MIT licensed, remains the general-purpose project |
 | Patched branch | [`multigpu`](../../tree/multigpu) (this page) — upstream + the performance patchset, and the source of all releases |
 | Upstream-tracking branch | [`master`](../../tree/master) — kept as close to upstream as practical, never released from |
-| Prebuilt binaries | [Releases](../../releases) — CUDA builds for Linux and Windows; see [Downloads](#6-downloads) |
+| Prebuilt binaries | [Releases](../../releases) — two Linux x86-64 CUDA builds per release (CUDA 12.9: V100 → RTX 5090; CUDA 13.4: Ampere+) plus `ghcr.io/lukolszewski/llama.cpp-multigpu` images; see [Downloads](#6-downloads) |
 | Benchmarks | Measured 2026-10-05 on machine-01 (6 × RTX 3090): prefill 1.75–8×, decode 1.2–10.8× vs upstream — [Performance summary](#4-performance-summary); protocol and raw data in [docs/multigpu/benchmarks.md](docs/multigpu/benchmarks.md) |
 
 ---
@@ -162,31 +162,40 @@ The structure allows additional machines (e.g. rented multi-4090 or multi-5090 b
 
 Prebuilt binaries are a first-class deliverable: many affected users do not build llama.cpp.
 
-- [Releases](../../releases) — every archive is built by CI from the `multigpu` branch.
-- `multigpu-latest` is a rolling prerelease, refreshed nightly from the patched branch.
-- Date-tagged releases (`multigpu-YYYYMMDD`) are permanent and are the ones referenced in
-  documentation and benchmark reports.
+[Releases](../../releases) are date-tagged (`multigpu-YYYYMMDD`), permanent, and built by CI from the
+tagged `multigpu` commit. Each release ships **two Linux x86-64 CUDA builds** with identical code:
 
-Each archive contains `BUILD_INFO.json` and `BUILD_INFO.txt` recording the `multigpu` commit, the
-upstream llama.cpp base commit it sits on, the CUDA/toolkit and compiler versions, the platform, the
-exact CMake configuration, and the list of downstream patches. No opaque binaries: if you can name the
-archive, you can name the source revision.
+| archive | CUDA | GPUs with native code (SASS) | PTX for other GPUs (compiled by the driver at load) | minimum driver |
+| --- | --- | --- | --- | --- |
+| `llama.cpp-multigpu-<date>-bin-ubuntu-cuda-12.9-x64.tar.gz` | 12.9 | V100 `sm_70`, RTX 30xx/A-series `sm_86`, RTX 40xx `sm_89`, RTX 50xx `sm_120a`/`sm_121a` | Maxwell `sm_50`, Pascal `sm_61`, Turing `sm_75`, A100 `sm_80`, H100 `sm_90` | R525+ for native targets; R570+ for Blackwell; R575+ (CUDA 12.9 PTX) for the PTX-only GPUs |
+| `llama.cpp-multigpu-<date>-bin-ubuntu-cuda-13.4-x64.tar.gz` | 13.4 | `sm_86`, `sm_89`, `sm_120a`, `sm_121a` | `sm_80`, `sm_90` (CUDA 13 cannot target Maxwell/Pascal/Volta; Turing left out) | R580+ |
 
-**Validation state is stated per artifact, not implied.** Public CI runners have no GPU at all, so no
-published build can be runtime-validated by CI. Only the configuration we own hardware for *can* be
-validated here, and no validation run has been executed yet:
+Pick `cuda-12.9` unless you specifically want the CUDA 13 toolkit; the RTX 3090 benchmark machine runs it.
+Next to each build: a `cudart-…` archive with the matching CUDA runtime + cuBLAS libraries (for hosts
+without a toolkit), the patch series as `…-patches.tar.gz`, and `SHA256SUMS.txt`.
 
-| Build | Packaging/integrity gate (Tier A) | Runtime validation on real hardware (Tier B) |
-| --- | --- | --- |
-| Linux x86-64, CUDA 12.8, `sm_86` (RTX 3090) | yes, in CI | **TBD** — the only configuration we are able to validate (on `machine-01`); not run yet |
-| Linux x86-64, CUDA 12.8, `sm_89` (RTX 4090) / `sm_120a` (RTX 5090) | yes, in CI | no — we own no such hardware; user reports only |
-| Windows x86-64, CUDA | yes, in CI | no |
-| Linux x86-64, CPU only | yes, in CI (build + upstream test suite) | no full-model run yet |
+Container images (same archives, on NVIDIA's runtime base; `llama-server` is the entrypoint, run with
+`--gpus all`):
 
-Artifacts we cannot test are published as ordinary llama.cpp builds and labelled
-"built and packaging-checked; not runtime-validated by us". We do not withhold binaries that people
-need, and we do not attach test claims we did not earn. Details:
-[docs/multigpu/builds.md](docs/multigpu/builds.md).
+- `ghcr.io/lukolszewski/llama.cpp-multigpu:server-cuda12.9-<date>` / `:server-cuda12.9` / `:latest`
+- `ghcr.io/lukolszewski/llama.cpp-multigpu:server-cuda13.4-<date>` / `:server-cuda13.4`
+- `ghcr.io/lukolszewski/llama.cpp-multigpu:server-cuda12.9-sm86` — RTX 3090-only image rebuilt on every
+  push to `multigpu` (not a release; `-<sha7>` tags are the immutable ones)
+
+Each archive and image contains `BUILD_INFO.json` and `BUILD_INFO.txt` recording the `multigpu` commit,
+the upstream llama.cpp base commit it sits on, the CUDA toolkit and compiler versions, the device
+architectures (SASS and PTX), the exact CMake configuration, and the list of downstream patches. No
+opaque binaries: if you can name the archive, you can name the source revision.
+
+**Validation state is stated per artifact, not implied.** Public CI runners have no GPU, so CI proves
+packaging and integrity (Tier A: archive unpacks, binaries run, the declared SASS/PTX targets are really
+embedded, downstream flags are wired, metadata matches the commit) for every artifact. Runtime
+validation on real hardware (Tier B) exists only for Linux / `sm_86` (6 × RTX 3090, the maintainer's
+machine, the same configuration that serves production). Every other architecture in these archives is
+compiled, not run: those builds are ordinary llama.cpp builds, labelled "built and packaging-checked;
+not runtime-validated by us". We do not withhold binaries that people need, and we do not attach test
+claims we did not earn. Reports from other hardware (archive name, GPU model/count, driver) are the
+evidence we lack. Details: [docs/multigpu/builds.md](docs/multigpu/builds.md).
 
 Archives are weights-free. MIT covers the code; model weights remain under their own license, and no
 GGUF is ever attached to a release.

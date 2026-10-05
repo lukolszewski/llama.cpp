@@ -4,25 +4,56 @@ How the patched branch is built, packaged, labelled and validated. The point is 
 any archive you can recover the exact source revision, the toolchain and the CMake configuration that
 produced it.
 
-## Branches and where builds come from
+## What CI builds, and when
 
-| branch | role | CI builds | CI releases |
-| --- | --- | --- | --- |
-| `master` | upstream llama.cpp mirror | not the downstream pipeline | **never** |
-| `multigpu` | patched branch, repository default | yes | yes |
+| trigger | workflow | what comes out |
+| --- | --- | --- |
+| push to `multigpu` | `multigpu-build.yml` | one CUDA 12.9 build for `sm_86` only (RTX 3090, the benchmark/production hardware), upstream test suite (`ctest -L main`), Tier A gate, runtime image `ghcr.io/lukolszewski/llama.cpp-multigpu:server-cuda12.9-sm86` (+ `-<sha7>`); the tarball is kept 14 days as a CI artifact, never released |
+| tag `multigpu-YYYYMMDD` | `multigpu-release.yml` | the two release flavours below as `.tar.gz` + `cudart` + `patches` + `SHA256SUMS.txt`, the GitHub Release (notes = `docs/multigpu/RELEASE-INTRO.md` + generated provenance and asset table), and both runtime images on ghcr |
+| manual dispatch | both | same as above for an arbitrary ref / existing tag |
 
-The downstream release workflow refuses to run on `master`, and upstream's own `release.yml` is gated
-off on this fork so mirroring upstream cannot mint releases or burn Windows/macOS minutes.
+There are **no** pull-request builds, no nightly schedule, no rolling prerelease, and no Windows or
+CPU-only artifacts. `master` (the upstream mirror) is never built or released from.
 
-Where GitHub does not allow expressions in `on: push: branches:`, the patched branch name appears
-literally in the two workflow trigger blocks; grep for `MULTIGPU:PATCHED_BRANCH` to find every spot.
-All *logic* is name-independent: jobs gate on `github.event.repository.default_branch` (optionally
-overridden by the `MULTIGPU_PATCHED_BRANCH` repository variable), so renaming the branch mainly means
-changing the default branch setting plus those trigger lines.
+`runs-on` is read from the `MULTIGPU_RUNNER` repository variable (default: GitHub-hosted
+`ubuntu-24.04`), so the builds can move to a self-hosted runner without editing the workflows.
+Upstream's own workflows are disabled on this fork (`scripts/multigpu/disable-foreign-workflows.sh`;
+rerun it after every upstream sync, GitHub re-registers workflows from the default branch).
 
-## Build configurations
+## The two release flavours
 
-Common flags (Linux CUDA, following upstream's proven `.devops/cuda.Dockerfile` recipe):
+| flavour | toolkit image | `CMAKE_CUDA_ARCHITECTURES` | native code (SASS) | PTX (JIT by the driver) | minimum driver |
+| --- | --- | --- | --- | --- | --- |
+| `cuda-12.9` | `nvidia/cuda:12.9.1-devel-ubuntu24.04` | `50-virtual;61-virtual;70-virtual;70-real;75-virtual;80-virtual;86-real;89-real;90-virtual;120a-real;121a-real` | `sm_70` (V100), `sm_86`, `sm_89`, `sm_120a`, `sm_121a` | `sm_50`, `sm_61`, `sm_70`, `sm_75`, `sm_80`, `sm_90` | R525+ (12.x minor-version compatibility) for the SASS targets; R570+ for Blackwell GPUs; R575+ (a driver that understands CUDA 12.9 PTX) for the PTX-only GPUs |
+| `cuda-13.4` | `nvidia/cuda:13.4.1-devel-ubuntu24.04` | `80-virtual;86-real;89-real;90-virtual;120a-real;121a-real` | `sm_86`, `sm_89`, `sm_120a`, `sm_121a` | `sm_80`, `sm_90` | R580+ (CUDA 13); PTX-only GPUs need a driver as new as CUDA 13.4 |
+
+Why these two:
+
+- `cuda-12.9` is ggml's own default architecture list for a CUDA 12.9 toolkit plus `70-real`, so V100
+  boxes get native code instead of PTX JIT. It spans every GPU from Maxwell to Blackwell on one
+  toolkit, and 12.x keeps the driver floor at the R525 branch for the SASS targets.
+- `cuda-13.4` exists for people who want the current toolkit. CUDA 13.0 removed offline compilation
+  for Maxwell, Pascal and Volta, and Turing (`75`) is left out of this flavour on purpose: anyone with
+  those GPUs takes `cuda-12.9`. Ampere and newer get the same SASS set as 12.9.
+- A `-virtual` entry embeds PTX that the driver JIT-compiles at first load (slow first start, and the
+  driver must be at least as new as the toolkit's PTX ISA). A `-real` entry embeds SASS that runs as-is
+  on that exact architecture. The gate verifies both lists against the fatbin, so the table above is
+  checked, not assumed.
+- The sm_86 push image is only there to validate every merge quickly and to give machine-01 something
+  to pull; it is not a release artifact.
+
+Compile probe on machine-01 (2026-10-05, Ryzen 9 7950X, 32 threads, the exact CI recipe inside the
+official devel images): both flavours compile cleanly (`exit 0`), `libggml-cuda.so` is 207 MB for
+`cuda-12.9` (SASS for 5 architectures + 6 PTX) and 139 MB for `cuda-13.4`; `cuobjdump --list-elf`
+showed the expected SASS sets. Wall time for `cuda-12.9` was 30 minutes while sharing the CPU with a
+second compile; a cold `cuda-13.4` time was not measured (the probe's run hit a warm ccache).
+Expect several hours per flavour on a GitHub-hosted 4-vCPU runner — the reason a self-hosted runner is
+planned.
+
+## Build recipe (both flavours, and the push build)
+
+Following upstream's `.devops/cuda.Dockerfile`, inside the official `nvidia/cuda:*-devel-ubuntu24.04`
+image (Ubuntu 24.04: gcc 13, cmake 3.28, ninja), with ccache:
 
 ```
 -DCMAKE_BUILD_TYPE=Release
@@ -33,64 +64,61 @@ Common flags (Linux CUDA, following upstream's proven `.devops/cuda.Dockerfile` 
 -DLLAMA_BUILD_SERVER=ON
 -DLLAMA_BUILD_TOOLS=ON           # llama-cli, llama-bench, llama-batched-bench, ...
 -DLLAMA_BUILD_EXAMPLES=OFF
--DLLAMA_BUILD_TESTS=OFF          # enabled only in the job that runs test-backend-ops
+-DLLAMA_BUILD_TESTS=OFF          # ON in the push build, which runs ctest -L main (test-backend-ops skipped: no GPU)
 -DLLAMA_BUILD_UI=OFF
--DLLAMA_USE_PREBUILT_UI=OFF      # do not pull UI assets from an org-owned HF bucket during CI
--DCMAKE_CUDA_ARCHITECTURES="<list>"
+-DLLAMA_USE_PREBUILT_UI=OFF      # no UI assets pulled from an org-owned bucket during CI
+-DLLAMA_OPENSSL=ON               # HTTPS model downloads (libssl at runtime)
+-DCMAKE_CUDA_ARCHITECTURES="<list from the table>"
 -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined
 -DCMAKE_INSTALL_RPATH='$ORIGIN' -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
 ```
 
 **A GPU is not required to build.** `nvcc` cross-compiles to SASS/PTX for whatever architecture list
-is passed; the official `nvidia/cuda:*-devel` image supplies the toolkit, and CI supplies the
-architecture list explicitly because `GGML_NATIVE=ON` (llama.cpp's default) resolves to `native` =
-"GPUs present at build time", which is meaningless on a GPU-less runner. A GPU is required only to
-*run* the result and to measure anything — see the validation tiers below.
+is passed. A GPU is required only to *run* the result and to measure anything (see the validation
+tiers). The web UI is not part of these archives; production on machine-01 serves an API, not a UI.
 
-### Architecture tiers
+## Artifact naming and contents
 
-| configuration | arch list | when |
+```
+llama.cpp-multigpu-<YYYYMMDD>-bin-ubuntu-cuda-12.9-x64.tar.gz      binaries + shared libraries (single top-level directory)
+llama.cpp-multigpu-<YYYYMMDD>-cudart-ubuntu-cuda-12.9-x64.tar.gz   libcudart, libcublas, libcublasLt (+ libnvJitLink) of that toolkit
+llama.cpp-multigpu-<YYYYMMDD>-bin-ubuntu-cuda-13.4-x64.tar.gz
+llama.cpp-multigpu-<YYYYMMDD>-cudart-ubuntu-cuda-13.4-x64.tar.gz
+llama.cpp-multigpu-<YYYYMMDD>-patches.tar.gz                        git format-patch series + PATCHES.md
+BUILD_INFO-cuda-12.9.json, BUILD_INFO-cuda-13.4.json, SHA256SUMS.txt
+```
+
+The push build uses `llama.cpp-multigpu-<sha7>-bin-ubuntu-cuda-12.9-x64.tar.gz` (CI artifact only).
+
+Every `bin` archive contains, in its top-level directory: `llama-server`, `llama-cli` and the other
+tools, `libggml*.so`, `libllama*.so`, `libmtmd.so`, `BUILD_INFO.json`, `BUILD_INFO.txt`, `LICENSE`,
+`AUTHORS`, `README-MULTIGPU.md`. The binaries find their libraries via `$ORIGIN`; unpack the `cudart`
+archive into the same directory (or put it on `LD_LIBRARY_PATH`) on a host without a CUDA toolkit. The
+NVIDIA driver (`libcuda.so.1`) always comes from the host.
+
+`BUILD_INFO.json` fields: `multigpu_commit`, `upstream_base_commit`, `commits_ahead_of_upstream_base`,
+`cuda_toolkit_version`, `cuda_nvcc`, `cuda_architectures` (the CMake list), `cuda_sass`, `cuda_ptx`,
+`driver_floor`, `compiler`, `cmake`, `os`, `cmake_config`, `validation.tier_b_runtime`, `patches[]`.
+Generated by `scripts/multigpu/build-info.sh`.
+
+## Container images
+
+`.devops/multigpu-cuda.Dockerfile` compiles nothing: CI unpacks the archive it just gated into `bin/`
+and adds NVIDIA's `nvidia/cuda:<ver>-runtime-ubuntu24.04` base (cudart + cuBLAS), `libgomp1`,
+`libssl3t64` and `curl` (health check). Layout matches upstream's `server` image: everything in `/app`,
+entrypoint `/app/llama-server`, `LLAMA_ARG_HOST=0.0.0.0`, port 8080, `HEALTHCHECK` on `/health`.
+CI runs `llama-server --version` inside the image and checks that `ldd` resolves everything except
+`libcuda.so.1` before pushing.
+
+| tag on `ghcr.io/lukolszewski/llama.cpp-multigpu` | from | moves? |
 | --- | --- | --- |
-| `cuda-12.8` merge build | `86-real;89-real` | every push to `multigpu` (RTX 3090 + RTX 4090) |
-| `cuda-12.8` release build | `86-real;89-real;120a-real` | nightly + tagged (adds RTX 5090 / Blackwell) |
-| `cuda-13.x` | `86-real;89-real;120a-real` | defined but commented out; enable when a CUDA 13 driver baseline is decided |
+| `server-cuda12.9-<YYYYMMDD>`, `server-cuda13.4-<YYYYMMDD>` | release archives | no |
+| `server-cuda12.9`, `server-cuda13.4`, `latest` (= cuda12.9) | latest release | yes |
+| `server-cuda12.9-sm86-<sha7>` | push build | no |
+| `server-cuda12.9-sm86` | latest push to `multigpu` | yes |
 
-Each additional real architecture multiplies `nvcc` time and inflates `ggml-cuda.so` (expect roughly
-1-2 GB), so merges keep a short list and releases carry the full one. CUDA 12.8 is the baseline because
-`120a` requires ≥ 12.8 and 12.x keeps the runtime driver floor at the R525 branch family, whereas CUDA
-13 builds want R580+.
-
-### Platforms
-
-| artifact | runner | CUDA | notes |
-| --- | --- | --- | --- |
-| `bin-ubuntu-cuda-<ver>-x64` | GitHub-hosted `ubuntu-24.04` + `nvidia/cuda` container | 12.8 | primary target for machine-01 |
-| `cudart-ubuntu-cuda-<ver>-x64` | same | — | `libcudart`/`libcublas*` copied from the toolkit, for hosts without CUDA installed |
-| `bin-ubuntu-x64` | GitHub-hosted `ubuntu-24.04` | off | CPU-only reference/fallback |
-| `bin-win-cuda-<ver>-x64.zip` | GitHub-hosted `windows-2022` + `.github/actions/windows-setup-cuda` | 12.4 / 13.x | built on nightly/tagged/manual only: Windows runner minutes are metered at 10x |
-| `cudart-llama-bin-win-cuda-<ver>-x64.zip` | same | — | `cudart64_*`, `cublas64_*`, `cublasLt64_*` |
-
-Windows and CUDA 13 jobs are intentionally not part of every-merge CI.
-
-## Artifact naming
-
-```
-llama.cpp-multigpu-<YYYYMMDD>+<multigpu-sha7>-bin-<os>-<backend>-<cuda>-<arch>.<ext>
-```
-
-Examples:
-
-```
-llama.cpp-multigpu-20261004+1ca80a5-bin-ubuntu-cuda-12.8-x64.tar.gz
-llama.cpp-multigpu-20261004+1ca80a5-cudart-ubuntu-cuda-12.8-x64.tar.gz
-llama.cpp-multigpu-20261004+1ca80a5-bin-win-cuda-12.4-x64.zip
-llama.cpp-multigpu-20261004+1ca80a5-bin-ubuntu-x64.tar.gz
-llama.cpp-multigpu-20261004+1ca80a5-patches.tar.gz
-llama.cpp-multigpu-20261004+1ca80a5-BUILD_INFO.json
-```
-
-Every archive contains, at top level: `BUILD_INFO.json`, `BUILD_INFO.txt`, `LICENSE`, `AUTHORS`, and a
-`README-MULTIGPU.md` pointer. Releases also carry `SHA256SUMS.txt`.
+The package is created by the first push with the workflow's `GITHUB_TOKEN`; its visibility must be set
+to public once by hand (GitHub → Packages → package settings), the API does not expose that switch.
 
 ## Release scheme
 
@@ -100,23 +128,18 @@ upstream base.
 
 | tag | meaning |
 | --- | --- |
-| `multigpu-latest` | rolling prerelease, refreshed nightly from the patched branch; assets replaced |
-| `multigpu-YYYYMMDD` | permanent release, created by pushing that tag or via manual dispatch |
-| `multigpu-YYYYMMDD.N` | same-day re-run |
+| `multigpu-YYYYMMDD` | permanent release, created by pushing an annotated tag on the `multigpu` tip |
+| `multigpu-YYYYMMDD.N` | same-day re-release (the workflow refuses to replace an existing release) |
 
-Release titles are searchable and self-describing:
-
-```
-llama.cpp-multigpu — Qwen multi-GPU performance build — 2026-10-04
+```sh
+git tag -a multigpu-20261005 -m "llama.cpp-multigpu 2026-10-05: <one line>"
+git push origin multigpu-20261005          # -> multigpu-release.yml
 ```
 
-Release body always includes: multigpu commit, upstream base commit, CUDA/toolchain version, platform,
-CMake configuration, downstream patch list, artifact table with the validation column, benchmark status
-(`TBD` until numbers exist), the mixed-prefill/generation limitation, and the "if upstream now performs
-comparably, use upstream" line.
-
-To avoid release spam: merges produce CI artifacts (retained 14 days), never GitHub Releases. GitHub
-Releases come from the nightly schedule or an explicit tag.
+Release title: `llama.cpp-multigpu 20261005 — Qwen3.8-Flash-Next multi-GPU performance build`. Body:
+`docs/multigpu/RELEASE-INTRO.md` (what the patches do, the measured numbers, the reference
+configuration, caveats — keep it in sync with README §4) followed by the generated provenance table, the
+asset table with SASS/PTX/driver columns and validation state, and the patch list.
 
 ## Validation tiers
 
@@ -124,36 +147,33 @@ Releases come from the nightly schedule or an explicit tag.
 Nothing in this tier claims the binary works on hardware; it proves the archive says true things:
 
 - archive unpacks; `llama-server --version` and `--help` exit 0;
-- `ldd` / dependency check resolves against the libraries shipped alongside or in the companion
-  `cudart` archive;
-- `cuobjdump --list-elf` confirms the CUDA fatbin contains the declared architectures, so metadata
-  cannot overstate GPU support;
+- `ldd` resolves against the libraries shipped alongside (the `cudart` bundle is checked for
+  completeness the same way: only `libcuda.so.1` may be unresolved);
+- `cuobjdump --list-elf` confirms every declared SASS architecture is in the fatbin and
+  `cuobjdump --list-ptx` every declared PTX target (`--expect-arch`, `--expect-ptx`; the push build
+  asserts `--expect-no-ptx`), so metadata cannot overstate GPU support;
 - `llama-server --help` advertises the downstream flags (`--prefill-max-partial`,
   `--prefill-long-threshold`, `--prefill-max-long`, `--seq-compact`, `--cache-idle-slots`) — a rebase
   that silently dropped a patch fails here;
-- `BUILD_INFO.json` matches the git HEAD of the run;
-- `LICENSE`/`AUTHORS` present; checksums recorded.
+- `BUILD_INFO.json` matches the git commit of the run;
+- `LICENSE`/`AUTHORS` present, no `.gguf` inside; checksums recorded.
 
 Implemented by `scripts/multigpu/validate-artifact.sh`, so the same checks can be run on a downloaded
-archive locally.
+archive locally (inside a `nvidia/cuda:*-devel` container for the `cuobjdump` part).
 
 **Tier B — runtime validation on real hardware. One configuration.**
-Linux x86-64 / CUDA 12.8 / `sm_86`, because that is the machine we own. Runs only through the opt-in
-self-hosted workflow (`multigpu-selfhosted.yml`), which loads Qwen3.8-Flash-Next `UD-Q4_K_XL` **from a
-local path** (no 111 GB download in CI), starts a 5-slot server, generates a few tokens, records the
-per-device memory split and runs one small `llama-bench` pass. Result is written as
-`runtime_tested: true|false` into the build metadata and surfaced in the release asset table.
+Linux x86-64 / `sm_86` (6 × RTX 3090, machine-01), because that is the machine we own, and it is the
+configuration that serves production and produced the README numbers. The opt-in self-hosted workflow
+(`multigpu-selfhosted.yml`) formalizes it: load Qwen3.8-Flash-Next `UD-Q4_K_XL` from a local path,
+start a 5-slot server, generate, record the per-device memory split, run one `llama-bench` pass. Until
+that runner is registered, Tier B for a release means the maintainer pulling the `cuda-12.9` image on
+machine-01 and running the smoke there.
 
-**Tier B status today: not yet executed.** The self-hosted runner is not registered, so every published
-artifact currently carries `runtime_tested: TBD` and no configuration has our runtime claim. Tier A is
-fully automated; Tier B requires you to attach `machine-01` as a runner (see the header comment of
-`multigpu-selfhosted.yml` for the labels and the `MULTIGPU_MODEL_PATH` variable).
-
-Everything else ships as an ordinary llama.cpp build: Tier A passed, Tier B not attempted, labelled
-"built and packaging-checked; not runtime-validated by us". We do not publish claims for CUDA/driver
-combinations we cannot run, we do not block releases waiting on validations that are impossible in our
-CI, and we do not withhold artifacts from users whose hardware differs from ours. If the self-hosted
-runner is offline, Tier B reads `TBD` and the release still publishes.
+Everything else (`sm_70`, `sm_89`, `sm_120a`/`sm_121a`, every PTX target, the whole `cuda-13.4`
+flavour) ships as an ordinary llama.cpp build: Tier A passed, Tier B not attempted, labelled "built and
+packaging-checked; not runtime-validated by us". We do not publish claims for CUDA/driver combinations
+we cannot run, we do not block releases on validations that are impossible in our CI, and we do not
+withhold artifacts from users whose hardware differs from ours.
 
 Reporting an untested configuration: use the
 [performance issue template](../../.github/ISSUE_TEMPLATE/050-multigpu-perf.yml) with the archive name,
@@ -171,8 +191,10 @@ cmake -S . -B build -G Ninja \
 cmake --build build -j$(nproc)
 
 # provenance metadata for whatever you just built
-scripts/multigpu/build-info.sh > build/bin/BUILD_INFO.json
+scripts/multigpu/build-info.sh --cuda-arch 86-real --cuda-sass sm_86 > build/bin/BUILD_INFO.json
 ```
 
-Docker: upstream's `.devops/cuda.Dockerfile` builds this branch unchanged
-(`CUDA_DOCKER_ARCH=86-real` recommended over the `default` list to keep the image small).
+Docker from source: upstream's `.devops/cuda.Dockerfile` builds this branch unchanged
+(`CUDA_DOCKER_ARCH=86-real` recommended over the `default` list to keep the image small); the
+production images on machine-01 are built that way. `.devops/multigpu-cuda.Dockerfile` is the
+packaging-only image described above.
