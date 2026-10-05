@@ -1,207 +1,140 @@
 name: "multigpu: release"
 
-# GitHub Releases for llama.cpp-multigpu. Two tiers, to avoid release spam:
-#   - rolling nightly prerelease  -> tag `multigpu-latest`, assets replaced each night
-#   - permanent date-tagged builds -> tag `multigpu-YYYYMMDD` (push the tag, or dispatch with mode=tagged)
-# Regular merges never create a GitHub Release; they only keep CI artifacts (multigpu-build.yml).
+# Tagged releases of llama.cpp-multigpu: push an annotated tag `multigpu-YYYYMMDD` on the patched branch
+# and this workflow builds exactly two Linux x86-64 CUDA flavours, gates them offline, publishes the
+# GitHub Release (tarballs + cudart + patches + SHA256SUMS, notes from docs/multigpu/RELEASE-INTRO.md)
+# and pushes both runtime images to ghcr.
 #
-# Release triggers are the patched branch's schedule and explicit tags. This workflow refuses to
-# publish anything for the upstream-tracking branch (master), which is a mirror, never a release
-# source.
+#   cuda-12.9  nvidia/cuda:12.9.1  V100 -> RTX 5090: SASS sm_70/86/89/120a/121a, PTX sm_50/61/70/75/80/90
+#   cuda-13.4  nvidia/cuda:13.4.1  Ampere+ only (CUDA 13 cannot target Maxwell/Pascal/Volta):
+#                                  SASS sm_86/89/120a/121a, PTX sm_80/90
 #
-# MULTIGPU:PATCHED_BRANCH - `on:` filters cannot contain expressions, so the literal branch/tag names
-# appear here. The *logic* below is name-independent: it resolves the patched branch from the
-# MULTIGPU_PATCHED_BRANCH repository variable, falling back to the repository default branch, and
-# scheduled runs always execute against the default branch. Renaming the patched branch therefore
-# means: rename in git, change the repository default branch, and update the marker lines.
+# No schedule, no rolling prerelease, no Windows/CPU artifacts, no PR builds. Regular pushes are handled by
+# multigpu-build.yml (sm_86 image only). `runs-on` comes from the MULTIGPU_RUNNER repository variable
+# (default GitHub-hosted ubuntu-24.04) so the matrix can move to a self-hosted runner later.
 
 on:
-  schedule:
-    - cron: '15 3 * * *' # nightly, on the repository default branch (must be the patched branch)
   push:
     tags:
-      - 'multigpu-*' # MULTIGPU:PATCHED_BRANCH (tag prefix; includes multigpu-latest, filtered below)
+      - 'multigpu-*'
   workflow_dispatch:
     inputs:
-      mode:
-        description: 'Release type'
-        type: choice
+      tag:
+        description: 'Existing multigpu-* tag to build and publish (the release must not exist yet)'
         required: true
-        default: rolling
-        options: [rolling, tagged]
-      ref:
-        description: 'Ref to release (branch or SHA). Empty = patched branch.'
-        required: false
-        default: ''
         type: string
-      cuda_arch:
-        description: 'CMAKE_CUDA_ARCHITECTURES for the release CUDA build'
-        required: false
-        default: '86-real;89-real;120a-real'
-        type: string
-      build_windows:
-        description: 'Include Windows CUDA builds (metered runner minutes)'
-        required: false
-        default: true
-        type: boolean
 
 concurrency:
   group: multigpu-release
-  queue: max
+  cancel-in-progress: false
 
 permissions:
   contents: write
-
-env:
-  # CUDA >= 12.8 is required for sm_120 (RTX 5090 / Blackwell). Keeping the release on the 12.x
-  # branch family holds the runtime driver floor at R525+ instead of R580+, which matters for owners
-  # of older driver installs on consumer multi-GPU boxes.
-  CUDA_IMAGE: nvidia/cuda:12.8.1-devel-ubuntu24.04
+  packages: write
 
 jobs:
+  # ------------------------------------------------------------------- gate
   gate:
-    name: decide what to release
+    name: resolve tag
     runs-on: ubuntu-24.04
     outputs:
-      should_release: ${{ steps.decide.outputs.should_release }}
-      release_tag: ${{ steps.decide.outputs.release_tag }}
-      prerelease: ${{ steps.decide.outputs.prerelease }}
-      title_date: ${{ steps.decide.outputs.title_date }}
-      source_ref: ${{ steps.decide.outputs.source_ref }}
-      reason: ${{ steps.decide.outputs.reason }}
+      tag: ${{ steps.decide.outputs.tag }}
+      version: ${{ steps.decide.outputs.version }}
+      sha: ${{ steps.decide.outputs.sha }}
     steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
       - id: decide
         env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          OVERRIDE_BRANCH: ${{ vars.MULTIGPU_PATCHED_BRANCH }}
+          GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
-          REF: ${{ github.ref }}
           REF_NAME: ${{ github.ref_name }}
-          REF_TYPE: ${{ github.event.ref_type }}
-          INPUT_MODE: ${{ inputs.mode }}
-          INPUT_REF: ${{ inputs.ref }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-
-          PATCHED="${OVERRIDE_BRANCH:-${DEFAULT_BRANCH:-multigpu}}"
-          SHOULD=true
-          REASON=""
-          SOURCE_REF="${INPUT_REF:-}"
-          MODE="${INPUT_MODE:-}"
-
-          case "$EVENT" in
-            schedule)
-              # Scheduled workflows run on the repository default branch: after the patched branch
-              # becomes the default, this refreshes the rolling prerelease with no hardcoded name.
-              SOURCE_REF="$PATCHED"
-              MODE="rolling"
-              REASON="nightly schedule against the default branch"
-              ;;
-            push)
-              if [ "$REF_TYPE" != "tag" ]; then
-                SHOULD=false; REASON="push events are handled by multigpu-build.yml (artifacts only)"
-              elif [ "$REF_NAME" = "multigpu-latest" ]; then
-                # Guard against a feedback loop: the rolling release job itself moves this tag.
-                SHOULD=false; REASON="the rolling tag itself does not trigger a release"
-              else
-                SOURCE_REF="$REF_NAME"
-                MODE="tagged"
-                REASON="tag push: $REF_NAME"
-              fi
-              ;;
-            workflow_dispatch)
-              SOURCE_REF="${INPUT_REF:-$PATCHED}"
-              MODE="${INPUT_MODE:-rolling}"
-              REASON="manual dispatch (mode=$MODE)"
-              ;;
-            *)
-              SHOULD=false; REASON="event $EVENT does not publish releases"
-              ;;
+          TAG="${INPUT_TAG:-$REF_NAME}"
+          case "$TAG" in
+            multigpu-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]*) : ;;
+            *) echo "::error::tag must look like multigpu-YYYYMMDD[.N], got '$TAG'"; exit 1 ;;
           esac
-
-          # Never release the upstream-tracking branch.
-          if [ "$SOURCE_REF" = "master" ] || [ "$SOURCE_REF" = "main" ]; then
-            if [ "$PATCHED" != "$SOURCE_REF" ]; then
-              SHOULD=false
-              REASON="refusing to publish downstream releases from the upstream-tracking branch $SOURCE_REF"
-            fi
+          git rev-parse -q --verify "refs/tags/$TAG" > /dev/null || { echo "::error::tag $TAG does not exist"; exit 1; }
+          SHA="$(git rev-list -n 1 "refs/tags/$TAG")"
+          # Refuse to double-publish; a permanent release is never silently replaced. Re-tag with .N instead.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "::error::release $TAG already exists; create a new tag (e.g. $TAG.1) instead of re-running"; exit 1
           fi
-
-          if [ "$SOURCE_REF" = "$PATCHED" ] && [ "$EVENT" = "push" ] && [ "$REF_TYPE" != "tag" ]; then
-            SHOULD=false
-            REASON="branch pushes only build artifacts (multigpu-build.yml)"
-          fi
-
-          DATE="$(date -u +%Y%m%d)"
-          ISO="$(date -u +%Y-%m-%d)"
-          if [ "$MODE" = "rolling" ]; then
-            TAG="multigpu-latest"
-            PRE=true
-          else
-            TAG="${REF_NAME:-multigpu-$DATE}"
-            case "$TAG" in multigpu-*) : ;; *) TAG="multigpu-$DATE" ;; esac
-            PRE=false
-          fi
-
-          echo "should_release=$SHOULD" >> "$GITHUB_OUTPUT"
-          echo "release_tag=$TAG"       >> "$GITHUB_OUTPUT"
-          echo "prerelease=$PRE"        >> "$GITHUB_OUTPUT"
-          echo "title_date=$ISO"        >> "$GITHUB_OUTPUT"
-          echo "source_ref=$SOURCE_REF" >> "$GITHUB_OUTPUT"
-          echo "reason=$REASON"         >> "$GITHUB_OUTPUT"
-
+          echo "tag=$TAG"                 >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#multigpu-}" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA"                 >> "$GITHUB_OUTPUT"
           {
             echo "### Release gate"
-            echo "- event: \`$EVENT\` ($REASON)"
-            echo "- patched branch resolved to: \`$PATCHED\` (default branch: \`${DEFAULT_BRANCH:-?}\`,"
-            echo "  override: \`${OVERRIDE_BRANCH:-<unset>}\`)"
-            echo "- source ref: \`$SOURCE_REF\`"
-            echo "- release tag: \`$TAG\` (prerelease: $PRE)"
-            echo "- publishing: \`$SHOULD\`"
-            echo "- benchmark numbers remain TBD: releases carry binaries and provenance, not results"
+            echo "- event: \`$EVENT\`, tag: \`$TAG\` -> \`$SHA\`"
+            echo "- flavours: cuda-12.9 (V100 -> RTX 5090) and cuda-13.4 (Ampere+)"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # --------------------------------------------------------------- Linux CUDA build
-  linux-cuda:
-    name: build linux-cuda ${{ matrix.name }}
+  # ------------------------------------------------------------- the two CUDA builds
+  # No GPU is needed to compile: nvcc cross-compiles SASS for the "-real" entries and PTX for the
+  # "-virtual" ones. GGML_NATIVE stays OFF (it means "GPUs present at build time", none here).
+  build:
+    name: build ${{ matrix.flavour }}
     needs: gate
-    if: ${{ needs.gate.outputs.should_release == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.MULTIGPU_RUNNER || 'ubuntu-24.04' }}
     container:
-      image: nvidia/cuda:12.8.1-devel-ubuntu24.04
+      image: ${{ matrix.image }}
       options: --user root
-    env:
-      ARCH_LIST: ${{ matrix.arch_list }}
-      TAG_DATE: ${{ needs.gate.outputs.title_date }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: '12.8'
-            cuda: '12.8'
-            arch_list: '86-real;89-real;120a-real'
-            # Release builds cover RTX 3090 (sm_86), RTX 4090 (sm_89) and RTX 5090 (sm_120a).
-            # Only sm_86 is runtime-validated by us today (machine-01). Everything else ships as a
-            # normal llama.cpp build with the packaging gate passed and runtime validation TBD.
+          - flavour: cuda-12.9
+            image: nvidia/cuda:12.9.1-devel-ubuntu24.04
+            cuda: '12.9'
+            cuda_full: '12.9.1'
+            # ggml's default list for CUDA 12.9 plus 70-real (native Volta code for V100 boxes).
+            arch_list: '50-virtual;61-virtual;70-virtual;70-real;75-virtual;80-virtual;86-real;89-real;90-virtual;120a-real;121a-real'
+            expect_sass: 'sm_70,sm_86,sm_89,sm_120a,sm_121a'
+            expect_ptx: 'sm_50,sm_61,sm_70,sm_75,sm_80,sm_90'
+            driver_floor: 'R525+ (native targets); R570+ for Blackwell; R575+ for the PTX-only GPUs (CUDA 12.9 PTX JIT)'
+          - flavour: cuda-13.4
+            image: nvidia/cuda:13.4.1-devel-ubuntu24.04
+            cuda: '13.4'
+            cuda_full: '13.4.1'
+            # Ampere and newer only: CUDA 13 removed Maxwell/Pascal/Volta, and Turing is left out on purpose.
+            arch_list: '80-virtual;86-real;89-real;90-virtual;120a-real;121a-real'
+            expect_sass: 'sm_86,sm_89,sm_120a,sm_121a'
+            expect_ptx: 'sm_80,sm_90'
+            driver_floor: 'R580+ (CUDA 13); a driver as new as CUDA 13.4 for the PTX-only GPUs'
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      DEBIAN_FRONTEND: noninteractive
+      ARCH_LIST: ${{ matrix.arch_list }}
+      VERSION: ${{ needs.gate.outputs.version }}
+      TAG: ${{ needs.gate.outputs.tag }}
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ needs.gate.outputs.source_ref }}
+          ref: ${{ needs.gate.outputs.sha }}
           fetch-depth: 0
 
       - name: Install build dependencies
-        env:
-          DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            build-essential cmake ninja-build git libssl-dev libgomp1 jq curl ca-certificates
+            build-essential cmake ninja-build git ccache libssl-dev libgomp1 jq curl ca-certificates binutils python3
+
+      - name: ccache
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: multigpu-release-${{ matrix.flavour }}-${{ needs.gate.outputs.sha }}
+          restore-keys: |
+            multigpu-release-${{ matrix.flavour }}-
 
       - name: Configure
         run: |
-          # No GPU here on purpose: nvcc cross-compiles to SASS/PTX for the architectures listed in
-          # CMAKE_CUDA_ARCHITECTURES. GGML_NATIVE must stay OFF - "native" would resolve to the GPUs
-          # present at build time, and GitHub-hosted runners have none.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_NATIVE=OFF \
@@ -218,372 +151,244 @@ jobs:
             -DCMAKE_CUDA_ARCHITECTURES="$ARCH_LIST" \
             -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined \
             -DCMAKE_INSTALL_RPATH='$ORIGIN' \
-            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache
 
       - name: Build
         run: cmake --build build --config Release -j "$(nproc)"
 
       - name: Build metadata
         run: |
-          ARCHS="$ARCH_LIST" scripts/multigpu/build-info.sh \
-            --platform linux-x64 --backend "cuda-${{ matrix.cuda }}" \
-            --cuda-version "${{ matrix.cuda }}" --cuda-arch "$ARCH_LIST" \
-            > build/bin/BUILD_INFO.json
-          scripts/multigpu/build-info.sh --platform linux-x64 --backend "cuda-${{ matrix.cuda }}" \
-            --cuda-version "${{ matrix.cuda }}" --cuda-arch "$ARCH_LIST" --format text \
-            > build/bin/BUILD_INFO.txt
-          cp LICENSE AUTHORS build/bin/
-          printf '# llama.cpp-multigpu\n\nTemporary downstream performance fork of llama.cpp: targeted patches for\nQwen3.8-Flash-Next on consumer multi-GPU systems (constrained PCIe).\nSee BUILD_INFO.json for the exact multigpu and upstream llama.cpp\nrevisions in this build.\n' > build/bin/README-MULTIGPU.md
+          CFG="$(grep -hE '^(GGML|LLAMA|CMAKE_CUDA_ARCH|CMAKE_BUILD_TYPE)[A-Z_]*:' build/CMakeCache.txt | tr '\n' ';' | sed 's/;$//')"
+          for fmt in json text; do
+            scripts/multigpu/build-info.sh --platform linux-x64 --backend "${{ matrix.flavour }}" \
+              --cuda-version "${{ matrix.cuda_full }}" --cuda-arch "$ARCH_LIST" \
+              --cuda-sass "${{ matrix.expect_sass }}" --cuda-ptx "${{ matrix.expect_ptx }}" \
+              --driver-floor "${{ matrix.driver_floor }}" --cmake-config "$CFG" --format "$fmt" \
+              > "build/bin/BUILD_INFO.$([ "$fmt" = json ] && echo json || echo txt)"
+          done
           cat build/bin/BUILD_INFO.txt
+          cp build/bin/BUILD_INFO.json "BUILD_INFO-${{ matrix.flavour }}.json"
 
-      - name: Package
+      - name: Package binaries
         run: |
-          SHORT="$(git rev-parse --short=7 HEAD)"
-          echo "SHORT_SHA=$SHORT" >> "$GITHUB_ENV"
-          NAME="llama.cpp-multigpu-${SHORT}-bin-ubuntu-cuda-${{ matrix.cuda }}-x64"
-          tar -czf "$NAME.tar.gz" -C build/bin .
-          sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
+          NAME="llama.cpp-multigpu-${VERSION}-bin-ubuntu-${{ matrix.flavour }}-x64"
+          echo "NAME=$NAME" >> "$GITHUB_ENV"
+          mkdir -p "pkg/$NAME"
+          cp -a build/bin/. "pkg/$NAME/"
+          cp LICENSE AUTHORS "pkg/$NAME/"
+          printf '# llama.cpp-multigpu %s (%s)\n\nllama.cpp + the multigpu performance patchset. BUILD_INFO.json / BUILD_INFO.txt name the\nexact multigpu and upstream llama.cpp revisions, the CUDA toolkit and the device architectures\nin this archive. Driver: %s.\nRun: ./llama-server ... (the libggml*/libllama*.so next to the binaries are found via $ORIGIN).\nProject and documentation: https://github.com/%s#readme\n' \
+            "$TAG" "${{ matrix.flavour }}" "${{ matrix.driver_floor }}" "$GITHUB_REPOSITORY" > "pkg/$NAME/README-MULTIGPU.md"
+          tar -C pkg -czf "$NAME.tar.gz" "$NAME"
+          sha256sum "$NAME.tar.gz" | tee "$NAME.tar.gz.sha256"
           size_bytes=$(stat -c %s "$NAME.tar.gz")
           echo "asset size: $size_bytes bytes"
           if [ "$size_bytes" -gt 1900000000 ]; then
-            echo "::error::asset exceeds the ~2 GB per-file release limit; trim CMAKE_CUDA_ARCHITECTURES"
-            exit 1
+            echo "::error::asset exceeds the ~2 GB per-file release limit; trim CMAKE_CUDA_ARCHITECTURES"; exit 1
           fi
 
-      - name: CUDA runtime libraries
+      - name: Package CUDA runtime libraries (cudart + cuBLAS of this toolkit)
         run: |
           mkdir -p cudart
-          for pat in 'libcudart.so' 'libcublas.so' 'libcublasLt.so'; do
-            find /usr/local/cuda*/lib64 -maxdepth 1 -name "${pat}*" -exec cp -P {} cudart/ \; 2>/dev/null || true
+          for pat in libcudart.so libcublas.so libcublasLt.so libnvJitLink.so; do
+            find /usr/local/cuda*/lib64 /usr/local/cuda*/targets/*/lib -maxdepth 1 -name "${pat}*" -exec cp -P {} cudart/ \; 2>/dev/null || true
           done
-          NAME="llama.cpp-multigpu-${SHORT_SHA}-cudart-ubuntu-cuda-${{ matrix.cuda }}-x64"
-          tar -czf "$NAME.tar.gz" -C cudart .
-          sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
+          ls -la cudart
+          # Completeness: with the archive dir + cudart on the path, only the driver library may be unresolved.
+          missing="$(LD_LIBRARY_PATH="$PWD/cudart:$PWD/pkg/$NAME" ldd "pkg/$NAME/libggml-cuda.so" | grep 'not found' | grep -v 'libcuda\.so\.1' || true)"
+          if [ -n "$missing" ]; then echo "::error::cudart bundle incomplete:"; echo "$missing"; exit 1; fi
+          CNAME="llama.cpp-multigpu-${VERSION}-cudart-ubuntu-${{ matrix.flavour }}-x64"
+          mkdir -p "pkgc/$CNAME" && cp -P cudart/* "pkgc/$CNAME/"
+          tar -C pkgc -czf "$CNAME.tar.gz" "$CNAME"
+          sha256sum "$CNAME.tar.gz" | tee "$CNAME.tar.gz.sha256"
 
-      - name: Tier A gate on the packaged archive
+      - name: Tier A gate (offline; SASS + PTX really embedded, flags wired, commit matches)
         run: |
-          # GPU-free integrity check (architectures really embedded, downstream switches present).
           scripts/multigpu/validate-artifact.sh \
-            --archive "llama.cpp-multigpu-${SHORT_SHA}-bin-ubuntu-cuda-${{ matrix.cuda }}-x64.tar.gz" \
-            --expect-arch sm_86,sm_89,sm_120a \
-            --expect-commit "$(git rev-parse HEAD)"
+            --archive "$NAME.tar.gz" \
+            --expect-arch "${{ matrix.expect_sass }}" \
+            --expect-ptx "${{ matrix.expect_ptx }}" \
+            --expect-commit "${{ needs.gate.outputs.sha }}"
 
       - name: Upload release candidates
         uses: actions/upload-artifact@v6
         with:
-          name: release-linux-cuda-${{ matrix.cuda }}
+          name: release-${{ matrix.flavour }}
           path: |
             llama.cpp-multigpu-*.tar.gz
-            llama.cpp-multigpu-*.sha256
+            llama.cpp-multigpu-*.tar.gz.sha256
+            BUILD_INFO-${{ matrix.flavour }}.json
           retention-days: 7
           if-no-files-found: error
 
-  # ---------------------------------------------------------------- Linux CPU build
-  linux-cpu:
-    name: build linux-cpu
-    needs: gate
-    if: ${{ needs.gate.outputs.should_release == 'true' }}
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.gate.outputs.source_ref }}
-          fetch-depth: 0
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential cmake ninja-build libssl-dev jq
-
-      - name: Configure and build
-        run: |
-          cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DGGML_CPU_ALL_VARIANTS=ON \
-            -DLLAMA_BUILD_SERVER=ON -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_TESTS=OFF \
-            -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_UI=OFF -DLLAMA_USE_PREBUILT_UI=OFF \
-            -DCMAKE_INSTALL_RPATH='$ORIGIN' -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
-          cmake --build build --config Release -j "$(nproc)"
-
-      - name: Metadata, Tier A checks and package
-        run: |
-          SHORT="$(git rev-parse --short=7 HEAD)"; echo "SHORT_SHA=$SHORT" >> "$GITHUB_ENV"
-          scripts/multigpu/build-info.sh --platform linux-x64 --backend cpu \
-            --runtime-tested TBD > build/bin/BUILD_INFO.json
-          scripts/multigpu/build-info.sh --platform linux-x64 --backend cpu --format text \
-            > build/bin/BUILD_INFO.txt
-          cp LICENSE AUTHORS build/bin/
-          ./build/bin/llama-server --version
-          ./build/bin/llama-server --help | grep -q -- "--prefill-max-partial"
-          NAME="llama.cpp-multigpu-${SHORT}-bin-ubuntu-x64"
-          tar -czf "$NAME.tar.gz" -C build/bin .
-          sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
-
-      - uses: actions/upload-artifact@v6
-        with:
-          name: release-linux-cpu
-          path: llama.cpp-multigpu-*.tar*
-          retention-days: 7
-          if-no-files-found: error
-
-  # ------------------------------------------------------------- Windows CUDA build
-  # Windows runner minutes are metered at a 10x multiplier and we cannot runtime-validate Windows
-  # builds at all, so this is opt-in per release.
-  windows-cuda:
-    name: build windows-cuda ${{ matrix.cuda }}
-    needs: gate
-    # Dispatch-only on purpose: scheduled/tagged releases must not silently burn metered Windows
-    # minutes, and we have no way to runtime-validate these on any hardware we own.
-    if: ${{ needs.gate.outputs.should_release == 'true' && github.event_name == 'workflow_dispatch' && inputs.build_windows }}
-    runs-on: windows-2022
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - cuda: '12.4'
-            arch_list: '86-real;89-real'
-          - cuda: '13.0'
-            arch_list: '86-real;89-real;120a-real'
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.gate.outputs.source_ref }}
-          fetch-depth: 0
-
-      - name: Install CUDA Toolkit
-        uses: ./.github/actions/windows-setup-cuda
-        with:
-          cuda_version: ${{ matrix.cuda }}
-          cuda_arch: x64
-
-      - name: Install Ninja
-        run: choco install ninja
-
-      - name: Build
-        shell: cmd
-        run: |
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
-          cmake -S . -B build -G "Ninja Multi-Config" ^
-            -DGGML_NATIVE=OFF ^
-            -DGGML_CUDA=ON ^
-            -DGGML_BACKEND_DL=ON ^
-            -DLLAMA_BUILD_SERVER=ON ^
-            -DLLAMA_BUILD_TOOLS=ON ^
-            -DLLAMA_BUILD_TESTS=OFF ^
-            -DLLAMA_BUILD_EXAMPLES=OFF ^
-            -DLLAMA_BUILD_UI=OFF ^
-            -DLLAMA_USE_PREBUILT_UI=OFF ^
-            -DCMAKE_CUDA_ARCHITECTURES=${{ matrix.arch_list }}
-          cmake --build build --config Release -j 3
-
-      - name: Metadata and package
-        shell: bash
-        run: |
-          SHORT="$(git rev-parse --short=7 HEAD)"; echo "SHORT_SHA=$SHORT" >> "$GITHUB_ENV"
-          ./scripts/multigpu/build-info.sh --platform windows-x64 --backend "cuda-${{ matrix.cuda }}" \
-            --cuda-version "${{ matrix.cuda }}" --cuda-arch "${{ matrix.arch_list }}" \
-            --runtime-tested TBD > build/bin/Release/BUILD_INFO.json
-          ./scripts/multigpu/build-info.sh --platform windows-x64 --backend "cuda-${{ matrix.cuda }}" \
-            --cuda-version "${{ matrix.cuda }}" --cuda-arch "${{ matrix.arch_list }}" --format text \
-            > build/bin/Release/BUILD_INFO.txt
-          cp LICENSE AUTHORS build/bin/Release/
-          NAME="llama.cpp-multigpu-${SHORT}-bin-win-cuda-${{ matrix.cuda }}-x64"
-          7z a -tzip "$NAME.zip" ./build/bin/Release/*
-          sha256sum "$NAME.zip" > "$NAME.zip.sha256"
-
-      - name: CUDA runtime DLLs
-        shell: bash
-        run: |
-          mkdir -p cudart
-          CP="$(cygpath "$CUDA_PATH")/bin"
-          cp "$CP"/cudart64_*.dll "$CP"/cublas64_*.dll "$CP"/cublasLt64_*.dll cudart/
-          SHORT="$(git rev-parse --short=7 HEAD)"
-          NAME="llama.cpp-multigpu-${SHORT}-cudart-win-cuda-${{ matrix.cuda }}-x64"
-          7z a -tzip "$NAME.zip" ./cudart/*
-          sha256sum "$NAME.zip" > "$NAME.zip.sha256"
-
-      - uses: actions/upload-artifact@v6
-        with:
-          name: release-windows-cuda-${{ matrix.cuda }}
-          path: llama.cpp-multigpu-*.zip*
-          retention-days: 7
-          if-no-files-found: error
+      - name: ccache statistics
+        if: always()
+        run: ccache --show-stats || true
 
   # ------------------------------------------------------------------- patch export
   patches:
     name: export patch series
     needs: gate
-    if: ${{ needs.gate.outputs.should_release == 'true' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ needs.gate.outputs.source_ref }}
+          ref: ${{ needs.gate.outputs.sha }}
           fetch-depth: 0
-
       - name: format-patch
         run: |
           scripts/multigpu/export-patches.sh --out patches
-          SHORT="$(git rev-parse --short=7 HEAD)"
-          tar -czf "llama.cpp-multigpu-${SHORT}-patches.tar.gz" patches
-          echo "SHORT_SHA=$SHORT" >> "$GITHUB_ENV"
+          tar -czf "llama.cpp-multigpu-${{ needs.gate.outputs.version }}-patches.tar.gz" patches
+          sha256sum "llama.cpp-multigpu-${{ needs.gate.outputs.version }}-patches.tar.gz" > "llama.cpp-multigpu-${{ needs.gate.outputs.version }}-patches.tar.gz.sha256"
           echo "### Patches in this release" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          sed -n '1,20p' patches/PATCHES.md >> "$GITHUB_STEP_SUMMARY"
+          sed -n '1,60p' patches/PATCHES.md >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-
       - uses: actions/upload-artifact@v6
         with:
           name: release-patches
-          path: llama.cpp-multigpu-*-patches.tar.gz
+          path: llama.cpp-multigpu-*-patches.tar.gz*
           retention-days: 7
           if-no-files-found: error
 
   # ------------------------------------------------------------------ publish release
   release:
     name: publish GitHub Release
-    needs: [gate, linux-cuda, linux-cpu, patches, windows-cuda]
-    if: ${{ always() && needs.gate.outputs.should_release == 'true' && needs.linux-cuda.result == 'success' && needs.linux-cpu.result == 'success' && needs.patches.result == 'success' && (needs.windows-cuda.result == 'success' || needs.windows-cuda.result == 'skipped') }}
+    needs: [gate, build, patches]
     runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.gate.outputs.tag }}
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ needs.gate.outputs.source_ref }}
+          ref: ${{ needs.gate.outputs.sha }}
           fetch-depth: 0
-          persist-credentials: true
 
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      - name: Download release candidates
-        uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v7
         with:
           pattern: release-*
           path: assets
           merge-multiple: true
 
-      - name: Assemble metadata and asset manifest
+      - name: Asset manifest from the per-flavour metadata
         run: |
-          mkdir -p meta
-          ls -l assets
-          # One BUILD_INFO per build configuration; the manifest feeds the release-notes asset table.
-          find assets -maxdepth 1 -name '*BUILD_INFO.json' -exec cp {} meta/ \; 2>/dev/null || true
-          if [ ! "$(ls -A meta 2>/dev/null)" ]; then
-            scripts/multigpu/build-info.sh --platform linux-x64 --backend cuda-12.8 > meta/BUILD_INFO.json
-          fi
-          : > assets/manifest.tsv
-          for f in assets/*.tar.gz assets/*.zip; do
-            [ -e "$f" ] || continue
-            name="$(basename "$f")"
-            case "$name" in
-              *bin-ubuntu-cuda-*)      platform=linux-x86-64;  ;;
-              *cudart-ubuntu-*)        platform=linux-x86-64;  ;;
-              *bin-win-cuda-*)         platform=windows-x86-64; ;;
-              *cudart-win-*)           platform=windows-x86-64; ;;
-              *bin-ubuntu-x64*)        platform=linux-x86-64;  ;;
-              *patches*)               platform=source;        ;;
-              *)                       platform=unknown;       ;;
+          mkdir -p meta && mv assets/BUILD_INFO-*.json meta/
+          ls -l assets meta
+          : > manifest.tsv
+          for j in meta/BUILD_INFO-*.json; do
+            flav="$(basename "$j" .json | sed 's/^BUILD_INFO-//')"
+            cuda="$(jq -r .cuda_toolkit_version "$j")"
+            sass="$(jq -r .cuda_sass "$j" | sed 's/,/, /g')"
+            ptx="$(jq -r .cuda_ptx "$j" | sed 's/,/, /g')"
+            driver="$(jq -r .driver_floor "$j")"
+            case "$flav" in
+              cuda-12.9) val='Tier A passed; Tier B (sm_86, 6 x RTX 3090) by the maintainer' ;;
+              *)         val='Tier A passed; not runtime-validated by us' ;;
             esac
-            cuda="$(printf '%s' "$name" | grep -oE 'cuda-[0-9]+\.[0-9]+' | head -1 | sed 's/cuda-//')"
-            arch="TBD"
-            case "$name" in
-              *cuda-12.4*) arch='sm_86, sm_89' ;;
-              *bin-ubuntu-cuda-12.8*) arch='sm_86, sm_89, sm_120a' ;;
-              *cuda-13.0*) arch='sm_86, sm_89, sm_120a' ;;
-              *bin-ubuntu-x64*) arch='CPU only' ;;
-              *patches*) arch='-' ;;
-            esac
-            # Tier A (packaging/integrity) is what CI can prove without a GPU, so it is passed for
-            # every artifact. Tier B (a real model loaded on real hardware) can only be recorded by
-            # multigpu-selfhosted.yml, so nothing published from here may claim it: all rows start as
-            # TBD until a Tier B run exists for that configuration.
-            tiera=passed
-            tierb=TBD
-            printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$platform" "${cuda:-n/a}" "$arch" "$tiera" "$tierb" \
-              >> assets/manifest.tsv
+            for f in assets/*-bin-ubuntu-${flav}-x64.tar.gz; do
+              printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(basename "$f")" "$flav" "$cuda" "$sass" "$ptx" "$driver" "$val" >> manifest.tsv
+            done
+            for f in assets/*-cudart-ubuntu-${flav}-x64.tar.gz; do
+              printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(basename "$f")" "$flav" "$cuda" "runtime libraries only" "-" "$driver" "-" >> manifest.tsv
+            done
           done
-          column -t -s $'\t' assets/manifest.tsv || cat assets/manifest.tsv
+          for f in assets/*-patches.tar.gz; do
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(basename "$f")" "source" "-" "git format-patch series" "-" "-" "-" >> manifest.tsv
+          done
+          column -t -s $'\t' manifest.tsv
 
       - name: Checksums
         run: |
-          cd assets
-          (for f in *.tar.gz *.zip; do [ -e "$f" ] || continue; sha256sum "$f"; done) > SHA256SUMS.txt
-          cat SHA256SUMS.txt
+          cd assets && rm -f *.sha256
+          sha256sum *.tar.gz > SHA256SUMS.txt && cat SHA256SUMS.txt
+          cp ../meta/BUILD_INFO-*.json .
 
       - name: Release notes
         run: |
           scripts/multigpu/release-notes.sh \
+            --intro docs/multigpu/RELEASE-INTRO.md \
             --meta meta \
-            --assets-manifest assets/manifest.tsv \
-            --title-date "${{ needs.gate.outputs.title_date }}" \
-            ${{ needs.gate.outputs.prerelease == 'true' && '--rolling' || '' }} \
-            > notes.md
-          wc -l notes.md
-          head -40 notes.md
+            --assets-manifest manifest.tsv \
+            --tag "$TAG" --repo "$GITHUB_REPOSITORY" > notes.md
+          wc -c notes.md
+          sed -n '1,60p' notes.md
 
-      - name: Release title
-        id: title
-        run: |
-          {
-            echo "full=llama.cpp-multigpu — Qwen multi-GPU performance build — ${{ needs.gate.outputs.title_date }}"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Publish (rolling prerelease)
-        if: ${{ needs.gate.outputs.prerelease == 'true' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.gate.outputs.release_tag }}
-          TITLE: ${{ steps.title.outputs.full }}
+      - name: Publish
         run: |
           set -euo pipefail
-          # Rolling release: replace the previous nightly assets instead of accumulating releases.
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
-            git push origin ":refs/tags/$TAG" || true
-          fi
-          git tag -f "$TAG"
-          git push -f origin "refs/tags/$TAG"
-          shopt -s nullglob
-          gh release create "$TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --prerelease \
-            --title "$TITLE" \
-            --notes-file notes.md \
+          TITLE="llama.cpp-multigpu ${TAG#multigpu-} — Qwen3.8-Flash-Next multi-GPU performance build"
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "$TITLE" --notes-file notes.md \
             assets/*
-
-      - name: Publish (tagged release)
-        if: ${{ needs.gate.outputs.prerelease != 'true' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.gate.outputs.release_tag }}
-          TITLE: ${{ steps.title.outputs.full }}
-        run: |
-          set -euo pipefail
-          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            if ! git rev-parse -q --verify "refs/tags/$TAG" > /dev/null; then
-              git tag "$TAG"; git push origin "refs/tags/$TAG"
-            fi
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
-              --notes-file notes.md assets/*
-          else
-            # Same-day re-run: never silently replace a permanent release. Add .N instead.
-            N=1
-            while gh release view "${TAG}.${N}" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; do N=$((N+1)); done
-            NEW="${TAG}.${N}"
-            echo "!! $TAG already exists; publishing $NEW instead"
-            git tag "$NEW"; git push origin "refs/tags/$NEW"
-            gh release create "$NEW" --repo "$GITHUB_REPOSITORY" --title "$TITLE (re-run $N)" \
-              --notes-file notes.md assets/*
-          fi
-
-      - name: Summary
-        if: always()
-        run: |
           {
             echo "### Published"
-            echo "- tag: \`${{ needs.gate.outputs.release_tag }}\`"
-            echo "- prerelease: ${{ needs.gate.outputs.prerelease }}"
-            echo "- reason: ${{ needs.gate.outputs.reason }}"
-            echo "- benchmarks: **TBD** - this release publishes binaries and provenance, not results"
-            echo "- validation: Tier A (packaging/integrity) for every artifact; Tier B (runtime on GPU)"
-            echo "  only for the sm_86 Linux CUDA 12.8 configuration, which is the hardware we own"
+            echo "- https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
+            echo "- assets:"; ls assets | sed 's/^/  - /'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # ------------------------------------------------------------- runtime images -> ghcr
+  images:
+    name: image server-${{ matrix.flavour }} -> ghcr
+    needs: [gate, build, release]
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavour: cuda-12.9
+            cuda_full: '12.9.1'
+            latest: true
+          - flavour: cuda-13.4
+            cuda_full: '13.4.1'
+            latest: false
+    env:
+      TAG: ${{ needs.gate.outputs.tag }}
+      VERSION: ${{ needs.gate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          sparse-checkout: .devops/multigpu-cuda.Dockerfile
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: release-${{ matrix.flavour }}
+          path: incoming
+
+      - name: Build context from the released archive
+        run: |
+          mkdir -p ctx
+          tar -xzf incoming/*-bin-ubuntu-${{ matrix.flavour }}-x64.tar.gz -C ctx
+          mv ctx/llama.cpp-multigpu-* ctx/bin
+          cp .devops/multigpu-cuda.Dockerfile ctx/Dockerfile
+
+      - name: Build, smoke, push
+        env:
+          GH_ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FLAVOUR: ${{ matrix.flavour }}
+          LATEST: ${{ matrix.latest }}
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/$(echo "$GITHUB_REPOSITORY" | tr 'A-Z' 'a-z')"
+          SHORT="server-${FLAVOUR/-/}"            # cuda-12.9 -> server-cuda12.9
+          TAGS=("$IMAGE:$SHORT-$VERSION" "$IMAGE:$SHORT")
+          [ "$LATEST" != "true" ] || TAGS+=("$IMAGE:latest")
+          args=(); for t in "${TAGS[@]}"; do args+=(-t "$t"); done
+          docker build -f ctx/Dockerfile \
+            --build-arg CUDA_VERSION="${{ matrix.cuda_full }}" \
+            --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --build-arg APP_VERSION="$TAG" \
+            --build-arg APP_REVISION="${{ needs.gate.outputs.sha }}" \
+            --build-arg IMAGE_SOURCE="https://github.com/$GITHUB_REPOSITORY" \
+            "${args[@]}" ctx
+          docker run --rm "${TAGS[0]}" --version
+          missing="$(docker run --rm --entrypoint sh "${TAGS[0]}" -c 'ldd /app/llama-server /app/*.so 2>/dev/null | grep "not found" | grep -v libcuda.so.1 || true')"
+          if [ -n "$missing" ]; then echo "::error::unresolved libraries in the image:"; echo "$missing"; exit 1; fi
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
+          for t in "${TAGS[@]}"; do docker push "$t"; done
+          { echo "### Images ($FLAVOUR)"; for t in "${TAGS[@]}"; do echo "- \`$t\`"; done; } >> "$GITHUB_STEP_SUMMARY"
