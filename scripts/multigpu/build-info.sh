@@ -8,7 +8,8 @@
 #
 # Usage:
 #   scripts/multigpu/build-info.sh [--platform OS] [--backend NAME] [--cuda-version V]
-#                                 [--cuda-arch LIST] [--cmake-config STR]
+#                                 [--cuda-arch LIST] [--cuda-sass sm_86,...] [--cuda-ptx sm_50,...]
+#                                 [--driver-floor TEXT] [--cmake-config STR]
 #                                 [--runtime-tested true|false|TBD] [--format json|text]
 #
 # Environment overrides (used by CI):
@@ -27,6 +28,9 @@ PLATFORM="${BUILD_PLATFORM:-unknown}"
 BACKEND="${BUILD_BACKEND:-unknown}"
 CUDA_VER="${CUDA_VERSION:-}"
 CUDA_ARCH="${CUDA_ARCH_LIST:-}"
+CUDA_SASS="${CUDA_SASS:-}"
+CUDA_PTX="${CUDA_PTX:-}"
+DRIVER_FLOOR="${DRIVER_FLOOR:-}"
 CMAKE_CFG="${CMAKE_CONFIG:-}"
 RUNTIME_TESTED="${RUNTIME_TESTED:-TBD}"
 FORMAT="json"
@@ -37,6 +41,9 @@ while [ $# -gt 0 ]; do
         --backend)         BACKEND="$2"; shift 2 ;;
         --cuda-version)    CUDA_VER="$2"; shift 2 ;;
         --cuda-arch)       CUDA_ARCH="$2"; shift 2 ;;
+        --cuda-sass)       CUDA_SASS="$2"; shift 2 ;;
+        --cuda-ptx)        CUDA_PTX="$2"; shift 2 ;;
+        --driver-floor)    DRIVER_FLOOR="$2"; shift 2 ;;
         --cmake-config)    CMAKE_CFG="$2"; shift 2 ;;
         --runtime-tested)  RUNTIME_TESTED="$2"; shift 2 ;;
         --format)          FORMAT="$2"; shift 2 ;;
@@ -123,13 +130,16 @@ platform            : $PLATFORM
 backend             : $BACKEND
 cuda toolkit        : ${CUDA_VER:-TBD} ($NVCC_VER)
 cuda architectures  : ${CUDA_ARCH:-TBD}
+cuda SASS (native)  : ${CUDA_SASS:-TBD}
+cuda PTX (JIT)      : ${CUDA_PTX:-none}
+driver floor        : ${DRIVER_FLOOR:-TBD}
 compiler            : $COMPILER
 cmake               : $CMAKE_VER
 ninja               : $NINJA_VER
 os / kernel         : $OS_INFO / $KERNEL
 cmake config        : ${CMAKE_CFG:-recorded in CI log}
-runtime validated   : $RUNTIME_TESTED   (Tier B: only sm_86 / Linux / CUDA 12.8 can be validated by us today)
-benchmark status    : no numbers published yet (TBD), see docs/multigpu/benchmarks.md
+runtime validated   : $RUNTIME_TESTED   (Tier B: only sm_86 / Linux can be validated by us today)
+benchmark status    : measured 2026-10-05 on machine-01 (6x RTX 3090), see docs/multigpu/benchmarks.md
 
 downstream patches ($AHEAD):
 $PATCH_TXT
@@ -158,6 +168,9 @@ cat <<EOF
   "cuda_toolkit_version": "$(json_escape "${CUDA_VER:-TBD}")",
   "cuda_nvcc": "$(json_escape "$NVCC_VER")",
   "cuda_architectures": "$(json_escape "${CUDA_ARCH:-}")",
+  "cuda_sass": "$(json_escape "${CUDA_SASS:-}")",
+  "cuda_ptx": "$(json_escape "${CUDA_PTX:-}")",
+  "driver_floor": "$(json_escape "${DRIVER_FLOOR:-}")",
   "compiler": "$(json_escape "$COMPILER")",
   "cmake": "$(json_escape "$CMAKE_VER")",
   "ninja": "$(json_escape "$NINJA_VER")",
@@ -169,7 +182,7 @@ cat <<EOF
     "tier_b_runtime": "$RUNTIME_TESTED",
     "tier_b_note": "GitHub-hosted CI has no GPU; runtime validation is limited to configurations we own hardware for"
   },
-  "benchmark_status": "TBD - no results published yet",
+  "benchmark_status": "measured 2026-10-05 on machine-01 (6x RTX 3090) against upstream df03399b8; see docs/multigpu/benchmarks.md",
   "target_model": "Qwen3.8-Flash-Next (llama.cpp arch qwen4exp), unsloth/Qwen3.8-Flash-Next-GGUF UD-Q4_K_XL",
   "license": "MIT (upstream llama.cpp license preserved)",
   "patches": [

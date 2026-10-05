@@ -9,20 +9,28 @@
 #   1. archive unpacks, expected files present (llama-server, BUILD_INFO.json/txt, LICENSE, AUTHORS)
 #   2. llama-server executes: --version and --help (with the archive dir on the library path)
 #   3. dynamic dependencies resolve
-#   4. the CUDA fatbin contains the declared device architectures (cuobjdump --list-elf, offline)
+#   4. the CUDA fatbin contains the declared device architectures: SASS (cuobjdump --list-elf) and, for
+#      forward-compatible "virtual" targets, PTX (cuobjdump --list-ptx) - both offline, no driver
 #   5. the downstream patchset's CLI switches are wired into this binary (a rebase that silently
 #      dropped a patch fails here)
 #   6. BUILD_INFO.json is valid and names both the multigpu commit and an upstream base commit
 #
 # Usage:
 #   scripts/multigpu/validate-artifact.sh --archive FILE.tar.gz [--expect-arch sm_86,sm_89]
+#                                         [--expect-ptx sm_50,sm_61,...] [--expect-no-ptx]
 #                                         [--expect-flags --prefill-max-partial,...]
 #                                         [--expect-commit SHA] [--keep]
+#
+# --expect-arch lists the SASS (real) architectures that must be embedded; --expect-ptx lists the PTX
+# (virtual) targets; --expect-no-ptx asserts the archive carries no PTX at all (sm_86-only CI images).
+# Names follow cuobjdump: `sm_70`, `sm_120a`; PTX entries are listed by cuobjdump as `<lib>.N.sm_XX.ptx`.
 
 set -euo pipefail
 
 ARCHIVE=""
 EXPECT_ARCH=""
+EXPECT_PTX=""
+EXPECT_NO_PTX=""
 EXPECT_FLAGS="--prefill-max-partial,--prefill-long-threshold,--prefill-max-long,--seq-compact,--cache-idle-slots"
 EXPECT_COMMIT=""
 KEEP=""
@@ -32,6 +40,8 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --archive)       ARCHIVE="$2"; shift 2 ;;
         --expect-arch)   EXPECT_ARCH="$2"; shift 2 ;;
+        --expect-ptx)    EXPECT_PTX="$2"; shift 2 ;;
+        --expect-no-ptx) EXPECT_NO_PTX=1; shift ;;
         --expect-flags)  EXPECT_FLAGS="$2"; shift 2 ;;
         --expect-commit) EXPECT_COMMIT="$2"; shift 2 ;;
         --keep)          KEEP=1; shift ;;
@@ -130,43 +140,64 @@ done
 
 # ---------------------------------------------------------------- 5. CUDA device code
 echo "-- CUDA device code (offline inspection, no driver needed)"
-CUDA_LIB="$(find "$WORKDIR" -type f \( -name 'ggml-cuda.so*' -o -name 'ggml-cuda*.dll' \) | head -1 || true)"
-if [ -z "$CUDA_LIB" ]; then
-    CUDA_LIB="$(find "$WORKDIR" -type f -name 'libggml*.so*' -o -type f -name 'ggml*.dll' | head -1 || true)"
-fi
+CUDA_LIB="$(find "$WORKDIR" -type f \( -name 'libggml-cuda.so*' -o -name 'ggml-cuda.so*' -o -name 'ggml-cuda*.dll' \) | head -1 || true)"
 if [ -n "$CUDA_LIB" ] && command -v cuobjdump >/dev/null 2>&1; then
     elf_list="$(cuobjdump --list-elf "$CUDA_LIB" 2>/dev/null || true)"
     if [ -z "$elf_list" ]; then
         # Fall back to the fatbin section listing if the ELF table is unavailable.
         elf_list="$(cuobjdump --list-text "$CUDA_LIB" 2>/dev/null || true)"
     fi
+    ptx_list="$(cuobjdump --list-ptx "$CUDA_LIB" 2>/dev/null || true)"
     if [ -z "$elf_list" ]; then
         bad "cuobjdump produced no device-code listing for $(basename "$CUDA_LIB")"
     else
-        detected="$(printf '%s\n' "$elf_list" | grep -oE 'sm_[0-9]+[a-f]?' | sort -u | tr '\n' ',')"
-        note "device code present: ${detected:-none}"
+        # cuobjdump names entries "<lib>.<n>.sm_86.cubin" / "<lib>.<n>.sm_50.ptx"; collect the unique targets.
+        # (|| true: grep exits 1 when a list is empty, e.g. no PTX in a SASS-only build; that is data, not an error)
+        sass_detected="$(printf '%s\n' "$elf_list" | grep -oE 'sm_[0-9]+[a-f]?' | sort -u || true)"
+        ptx_detected="$(printf '%s\n' "$ptx_list" | grep -oE 'sm_[0-9]+[a-f]?' | sort -u || true)"
+        note "SASS present: $(printf '%s' "$sass_detected" | tr '\n' ' ')"
+        note "PTX present:  $(printf '%s' "${ptx_detected:-none}" | tr '\n' ' ')"
         if [ -n "$EXPECT_ARCH" ]; then
             IFS=',' read -r -a arches <<< "$EXPECT_ARCH"
             for a in "${arches[@]}"; do
                 [ -n "$a" ] || continue
-                if printf '%s' "$detected" | grep -q -- "$a"; then
-                    note "declared architecture $a is embedded"
+                if printf '%s\n' "$sass_detected" | grep -qx -- "$a"; then
+                    note "declared SASS architecture $a is embedded"
                 else
-                    bad "declared architecture $a is NOT embedded (metadata overstates GPU support)"
+                    bad "declared SASS architecture $a is NOT embedded (metadata overstates GPU support)"
                 fi
             done
+        fi
+        if [ -n "$EXPECT_PTX" ]; then
+            IFS=',' read -r -a ptxes <<< "$EXPECT_PTX"
+            for a in "${ptxes[@]}"; do
+                [ -n "$a" ] || continue
+                if printf '%s\n' "$ptx_detected" | grep -qx -- "$a"; then
+                    note "declared PTX target $a is embedded (JIT on the driver at load time)"
+                else
+                    bad "declared PTX target $a is NOT embedded (forward compatibility claim is false)"
+                fi
+            done
+        fi
+        if [ -n "$EXPECT_NO_PTX" ]; then
+            if [ -z "$ptx_detected" ]; then
+                note "no PTX embedded, as declared (real architectures only)"
+            else
+                bad "PTX is embedded although the build was declared SASS-only: $(printf '%s' "$ptx_detected" | tr '\n' ' ')"
+            fi
         fi
     fi
 elif [ -n "$CUDA_LIB" ]; then
     skip "cuobjdump unavailable; falling back to embedded arch strings"
     detected="$(strings "$CUDA_LIB" 2>/dev/null | grep -oE 'sm_[0-9]+[a-f]?' | sort -u | tr '\n' ',' || true)"
     note "strings-detected architectures: ${detected:-none} (weaker than cuobjdump)"
+    [ -z "$EXPECT_PTX" ] || bad "--expect-ptx needs cuobjdump; run the gate inside the nvidia/cuda devel image"
 else
     # A gate that silently skips its main check is worse than one that fails: if the caller declared
     # which device architectures the artifact must contain, the absence of CUDA device code is a
     # packaging error, not something to shrug at.
-    if [ -n "$EXPECT_ARCH" ]; then
-        bad "no CUDA backend library found in the archive, but --expect-arch was given ($EXPECT_ARCH)"
+    if [ -n "$EXPECT_ARCH$EXPECT_PTX" ]; then
+        bad "no CUDA backend library found in the archive, but --expect-arch/--expect-ptx was given"
     else
         skip "no CUDA backend library in this archive (CPU-only build?)"
     fi
