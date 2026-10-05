@@ -20,7 +20,7 @@ new inference runtime, model format, or ecosystem.
 | Patched branch | [`multigpu`](../../tree/multigpu) (this page) — upstream + the performance patchset, and the source of all releases |
 | Upstream-tracking branch | [`master`](../../tree/master) — kept as close to upstream as practical, never released from |
 | Prebuilt binaries | [Releases](../../releases) — CUDA builds for Linux and Windows; see [Downloads](#6-downloads) |
-| Benchmarks | Not published yet — structure in [Performance summary](#4-performance-summary), methodology in [docs/multigpu/benchmarks.md](docs/multigpu/benchmarks.md) |
+| Benchmarks | Measured 2026-10-05 on machine-01 (6 × RTX 3090): prefill 1.75–8×, decode 1.2–10.8× vs upstream — [Performance summary](#4-performance-summary); protocol and raw data in [docs/multigpu/benchmarks.md](docs/multigpu/benchmarks.md) |
 
 ---
 
@@ -132,7 +132,7 @@ in [docs/multigpu/benchmarks.md#mixed-workload-behavior](docs/multigpu/benchmark
 
 `machine-01`, the primary benchmark machine. Full record and per-field provenance:
 [benches/multi-gpu/machine-01-7950x-6x3090/hardware.md](benches/multi-gpu/machine-01-7950x-6x3090/hardware.md).
-Fields marked `TBD` are not yet measured; nothing here is estimated.
+Fields marked `TBD` are not yet measured (PCIe link state under load needs root); nothing here is estimated.
 
 | Component | Value |
 | --- | --- |
@@ -271,7 +271,7 @@ Summarized here; specified in [docs/multigpu/benchmarks.md](docs/multigpu/benchm
 - **Upstream rebases can break things.** llama.cpp moves fast; a sync may need conflict resolution and
   re-validation.
 - **Benchmark coverage is limited to the hardware we own**, and public CI has no GPU.
-- **No numbers yet.** The tables are `TBD`.
+- **One machine, one model.** The published numbers are from machine-01 and Qwen3.8-Flash-Next only; other machines' rows stay `TBD` until they are measured.
 
 ## 10. Relationship to upstream llama.cpp
 
