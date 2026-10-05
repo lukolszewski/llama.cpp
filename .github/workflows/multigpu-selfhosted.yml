@@ -1,0 +1,291 @@
+name: "multigpu: self-hosted (Tier B + benchmarks)"
+
+# Optional, opt-in pipeline for people who own the target hardware.
+#
+# Public GitHub-hosted runners have no GPU, so nothing published from multigpu-build.yml can claim a
+# binary actually served a model on real silicon, and no benchmark number can be produced there. This
+# workflow closes that gap on a machine that is registered as a self-hosted runner with the labels
+# below - e.g. machine-01 (Ryzen 9 7950X + 6 x RTX 3090, constrained PCIe).
+#
+# It is inert until such a runner exists: nothing else in the pipeline depends on it, and no release is
+# blocked by it. Releases still publish with Tier B = TBD.
+#
+# MULTIGPU:PATCHED_BRANCH - literal branch name in the trigger below; job logic resolves the patched
+# branch from the repository default branch or the MULTIGPU_PATCHED_BRANCH variable.
+#
+# Setup on the machine (one time):
+#   1. Settings -> Developers -> Personal access tokens -> classic, scope `repo`
+#   2. Repository -> Settings -> Actions -> Self-hosted runners -> New self-hosted runner
+#      OS: Linux, labels: self-hosted, Linux, NVIDIA, MULTIGPU, sm_86
+#   3. Configure the service so it survives reboots (actions-runner/runsvc.sh + systemd)
+#   4. Repository secrets/variables:
+#        variable MULTIGPU_MODEL_PATH  = /abs/path/Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf
+#        variable MULTIGPU_MACHINE_DIR = benches/multi-gpu/machine-01-7950x-6x3090
+#   The model is ~111 GB and must already be on disk: this workflow never downloads weights.
+#
+# Security note: a self-hosted runner executes code from fork pull requests on your own hardware. Keep
+# `run` events limited to push / workflow_dispatch / schedule (as below), and only enable pull_request
+# if the runner is dedicated to this repository and you accept that risk.
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: 'What to run'
+        type: choice
+        required: true
+        default: smoke
+        options: [smoke, snapshot, single-slot, five-slot, full]
+      ref:
+        description: 'Ref to build and test (empty = patched branch)'
+        required: false
+        default: ''
+        type: string
+      slots:
+        description: 'Slot count for benchmark tasks'
+        required: false
+        default: '5'
+        type: string
+      sizes:
+        description: 'Comma-separated prompt/context sizes (tokens)'
+        required: false
+        default: '5000,50000,150000,200000,250000'
+        type: string
+
+concurrency:
+  group: multigpu-selfhosted
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  gate:
+    name: resolve patched branch
+    runs-on: ubuntu-24.04
+    outputs:
+      source_ref: ${{ steps.check.outputs.source_ref }}
+      patched: ${{ steps.check.outputs.patched }}
+    steps:
+      - id: check
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          OVERRIDE_BRANCH: ${{ vars.MULTIGPU_PATCHED_BRANCH }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          PATCHED="${OVERRIDE_BRANCH:-${DEFAULT_BRANCH:-multigpu}}"
+          SOURCE_REF="${INPUT_REF:-$PATCHED}"
+          IS_PATCHED=false
+          [ "$SOURCE_REF" = "$PATCHED" ] && IS_PATCHED=true
+          echo "source_ref=$SOURCE_REF" >> "$GITHUB_OUTPUT"
+          echo "patched=$IS_PATCHED"    >> "$GITHUB_OUTPUT"
+          echo "- patched branch: \`$PATCHED\`; building \`$SOURCE_REF\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- the upstream-tracking branch is never a release source; this job only measures" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+  hardware-snapshot:
+    name: capture machine record (${{ matrix.gpu_label }})
+    needs: gate
+    if: ${{ inputs.task == 'snapshot' || inputs.task == 'full' || inputs.task == 'smoke' }}
+    runs-on: [self-hosted, Linux, NVIDIA, MULTIGPU, sm_86]
+    strategy:
+      fail-fast: false
+      matrix:
+        gpu_label: [sm_86]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.gate.outputs.source_ref }}
+          fetch-depth: 0
+
+      - name: Snapshot hardware, topology and toolchain
+        run: |
+          DIR="${{ vars.MULTIGPU_MACHINE_DIR || 'benches/multi-gpu/machine-01-7950x-6x3090' }}"
+          mkdir -p "$DIR"
+          # Idle link state is captured here; note in the file that LnkCap/LnkSta need sudo and that
+          # GPUs idle in P8 report Gen1 - quoting that as link capability would be wrong.
+          ./scripts/multigpu/env-snapshot.sh "$DIR" || true
+          ls -l "$DIR"
+
+      - name: Commit the snapshot back to the branch
+        run: |
+          DIR="${{ vars.MULTIGPU_MACHINE_DIR || 'benches/multi-gpu/machine-01-7950x-6x3090' }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$DIR" || true
+          if ! git diff --cached --quiet; then
+            git commit -m "bench(multigpu): capture $(hostname) hardware snapshot ($(date -u +%Y%m%d))"
+            git push origin "HEAD:${{ needs.gate.outputs.source_ref }}"
+          else
+            echo "no snapshot changes to commit"
+          fi
+
+  runtime-smoke:
+    name: Tier B runtime smoke
+    needs: [gate, hardware-snapshot]
+    if: ${{ (inputs.task == 'smoke' || inputs.task == 'full') && needs.gate.outputs.patched == 'true' }}
+    runs-on: [self-hosted, Linux, NVIDIA, MULTIGPU, sm_86]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.gate.outputs.source_ref }}
+          fetch-depth: 0
+
+      - name: Locate the model on this machine
+        run: |
+          MODEL="${{ vars.MULTIGPU_MODEL_PATH }}"
+          if [ -z "$MODEL" ] || [ ! -f "$MODEL" ]; then
+            echo "::error::MULTIGPU_MODEL_PATH must point at the first shard of a local"
+            echo "  Qwen3.8-Flash-Next UD-Q4_K_XL split set (~111 GB). This workflow never downloads"
+            echo "  weights. Set the variable in Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          echo "MODEL=$MODEL" >> "$GITHUB_ENV"
+
+      - name: Build this revision for the hardware it will run on
+        run: |
+          # Here a GPU *is* present, so GGML_NATIVE may be used; we still pin the architecture so the
+          # result is comparable with the published sm_86 artifacts.
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DGGML_CUDA=ON \
+            -DGGML_BACKEND_DL=ON -DLLAMA_BUILD_SERVER=ON -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_UI=OFF -DLLAMA_USE_PREBUILT_UI=OFF \
+            -DCMAKE_CUDA_ARCHITECTURES="86-real"
+          cmake --build build --config Release -j "$(nproc)"
+
+      - name: Tier A gate on the locally built tree
+        run: |
+          scripts/multigpu/build-info.sh --platform linux-x64 --backend cuda-12.8-sm_86 \
+            --cuda-arch "86-real" > build/bin/BUILD_INFO.json
+          scripts/multigpu/build-info.sh --platform linux-x64 --backend cuda-12.8-sm_86 \
+            --cuda-arch "86-real" --format text > build/bin/BUILD_INFO.txt
+          cp LICENSE AUTHORS build/bin/
+          tar -czf local-build.tar.gz -C build/bin .
+          scripts/multigpu/validate-artifact.sh --archive local-build.tar.gz \
+            --expect-arch sm_86 --expect-commit "$(git rev-parse HEAD)"
+
+      - name: Tier B smoke on real hardware
+        run: |
+          ./scripts/multigpu/bench/runtime-smoke.sh \
+            --bin ./build/bin/llama-server --model "$MODEL" \
+            --slots "${{ inputs.slots || '5' }}" --ctx 32768 --out runtime-smoke
+
+      - name: Record the validation state in build metadata
+        run: |
+          # runtime_tested=true for this configuration becomes part of the published metadata once the
+          # release workflow picks it up; here it is recorded as a run artifact.
+          scripts/multigpu/build-info.sh --platform linux-x64 --backend cuda-12.8-sm_86 \
+            --cuda-arch "86-real" --runtime-tested true > "runtime-smoke/BUILD_INFO.validated.json"
+
+      - name: Upload smoke evidence
+        uses: actions/upload-artifact@v6
+        with:
+          name: tier-b-runtime-smoke
+          path: runtime-smoke/
+          retention-days: 90
+
+  benchmarks:
+    name: run benchmark suite
+    needs: [gate, runtime-smoke]
+    if: ${{ inputs.task == 'single-slot' || inputs.task == 'five-slot' || inputs.task == 'full' }}
+    runs-on: [self-hosted, Linux, NVIDIA, MULTIGPU, sm_86]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.gate.outputs.source_ref }}
+          fetch-depth: 0
+
+      - name: Locate model and the binaries under test
+        run: |
+          MODEL="${{ vars.MULTIGPU_MODEL_PATH }}"
+          [ -f "$MODEL" ] || { echo "::error::MULTIGPU_MODEL_PATH invalid"; exit 1; }
+          echo "MODEL=$MODEL" >> "$GITHUB_ENV"
+          echo "MULTIGPU_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "UPSTREAM_BASE=$(git merge-base HEAD origin/master 2>/dev/null || echo TBD)" >> "$GITHUB_ENV"
+
+      - name: Refuse to measure a busy machine
+        run: |
+          used="$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | sort -n | tail -1)"
+          if [ "${used:-0}" -gt 2048 ]; then
+            echo "::error::GPUs are already busy (${used} MiB on one device). Benchmarks on a"
+            echo "   contended machine are not comparable; stop the other server first."
+            exit 1
+          fi
+          echo "nvidia-smi --query-gpu=index,memory.used,temperature.gpu,clocks.sm,power.draw"
+          nvidia-smi --query-gpu=index,memory.used,temperature.gpu,clocks.sm,power.draw --format=csv
+
+      - name: Build the multigpu binary under test
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF \
+            -DGGML_CUDA=ON -DGGML_BACKEND_DL=ON -DLLAMA_BUILD_SERVER=ON -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_UI=OFF \
+            -DLLAMA_USE_PREBUILT_UI=OFF -DCMAKE_CUDA_ARCHITECTURES="86-real"
+          cmake --build build --config Release -j "$(nproc)"
+
+      - name: Single-slot suite
+        if: ${{ inputs.task == 'single-slot' || inputs.task == 'full' }}
+        run: |
+          DIR="${{ vars.MULTIGPU_MACHINE_DIR || 'benches/multi-gpu/machine-01-7950x-6x3090' }}"
+          mkdir -p "$DIR"
+          ./scripts/multigpu/bench/run-single-slot.sh \
+            --bin ./build/bin/llama-bench --model "$MODEL" \
+            --sizes "${{ inputs.sizes }}" \
+            --out "$DIR/single-slot-${MULTIGPU_COMMIT:0:7}.csv" 2>&1 | tee "$DIR/single-slot-${MULTIGPU_COMMIT:0:7}.log"
+
+      - name: Five-slot suite
+        if: ${{ inputs.task == 'five-slot' || inputs.task == 'full' }}
+        run: |
+          DIR="${{ vars.MULTIGPU_MACHINE_DIR || 'benches/multi-gpu/machine-01-7950x-6x3090' }}"
+          mkdir -p "$DIR"
+          SIZE="${{ inputs.sizes }}"
+          for n in $(echo "$SIZE" | tr ',' ' '); do
+            ./build/bin/llama-server -m "$MODEL" -ngl 99 -sm layer -fa on \
+              -np "${{ inputs.slots }}" --ctx-size "$n" > "$DIR/server-${n}.log" 2>&1 &
+            SPID=$!
+            until curl -sf http://127.0.0.1:8080/health > /dev/null 2>&1; do
+              kill -0 $SPID || { echo "server died; see $DIR/server-${n}.log"; exit 1; }
+              sleep 5
+            done
+            for phase in pp tg; do
+              python3 ./scripts/multigpu/bench/run-5-slot.py \
+                --slots "${{ inputs.slots }}" --size "$n" --phase "$phase" \
+                --multigpu-commit "$MULTIGPU_COMMIT" --upstream-commit "$UPSTREAM_BASE" \
+                --model "$MODEL" \
+                --out "$DIR/5slot-${n}-${phase}-${MULTIGPU_COMMIT:0:7}.json"
+            done
+            kill $SPID; wait $SPID 2>/dev/null || true
+            sleep 20   # let the GPUs cool between runs; thermal state changes results on this class of box
+          done
+
+      - name: Upload and commit results
+        if: always()
+        run: |
+          DIR="${{ vars.MULTIGPU_MACHINE_DIR || 'benches/multi-gpu/machine-01-7950x-6x3090' }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$DIR" 2>/dev/null || true
+          if ! git diff --cached --quiet; then
+            git commit -m "bench(multigpu): raw run output from $(hostname) ($(date -u +%Y%m%d))"
+            git push origin "HEAD:${{ needs.gate.outputs.source_ref }}" || echo "push failed; artifacts still uploaded"
+          fi
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: benchmark-run-output
+          path: benches/multi-gpu/**
+          retention-days: 90
+
+      - name: Reminder
+        if: always()
+        run: |
+          cat <<'EOF'
+          Raw run output is now in benches/multi-gpu/<machine>/.
+          Next step, by hand: transcribe the numbers into the table in docs/multigpu/benchmarks.md,
+          naming the upstream commit and the multigpu commit for the row, and include the
+          all-prefill / all-generate caveat. Mixed prefill+generation still has no suite; do not
+          present these results as if it did.
+          EOF
