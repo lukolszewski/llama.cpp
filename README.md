@@ -83,40 +83,47 @@ Concretely, the fork exists to:
 
 ## 4. Performance summary
 
-**No numbers are published yet.** Optimization work is ongoing and the benchmark runs have not been
-executed. The table below is the structure that future results will fill in — every cell is `TBD` by
-design, and no figure in this repository is fabricated. Reported speedups will always be tied to a
-named upstream commit and a named machine.
-
-Machine `machine-01` (see [§5](#5-hardware-tested)); model Qwen3.8-Flash-Next `UD-Q4_K_XL`;
-upstream commit `TBD`; multigpu commit `TBD`.
+Measured 2026-10-05 on `machine-01` (see [§5](#5-hardware-tested)); model Qwen3.8-Flash-Next
+`UD-Q4_K_XL`; upstream commit `df03399b8` (the revision the patchset branches from, built with the same
+recipe: CUDA 12.4.1, gcc 12, `86-real`); multigpu commit `134489582` (code identical to `e4054f726`, the
+configuration in production on this machine). Both servers ran the same command line — 5 slots × 262144
+context, `q8_0` KV cache, `-fa on`, `-b 2048 -ub 512`, layer split over six RTX 3090 — plus the fork's
+runtime switches on the patched side (`LLAMA_DECODE_PIPELINE=1 LLAMA_SERVER_GROUPS=5 LLAMA_PIPELINE_PARALLEL=1
+GGML_CUDA_GRAPHS_FORCE=1 LLAMA_ATTN_ROT_DISABLE=1`, `--prefill-max-partial 2`); lookup speculation was **off**.
+Prompts are synthetic word lists of the stated token count (within 1 %: 4992 / 49678 / 148978 / 198628 /
+248278 tokens); prefill = one request per slot with `cache_prompt: false`, generate = 128 greedy tokens on the
+cached prompt at that depth. Units: tokens/s; for 5 slots the aggregate with the per-slot mean in parentheses.
+Protocol, raw JSON and server logs: [docs/multigpu/benchmarks.md](docs/multigpu/benchmarks.md),
+`benches/multi-gpu/machine-01-7950x-6x3090/2026-10-05-grid-df03399b8-vs-134489582/`.
 
 | Workload | Context | Upstream llama.cpp | llama.cpp-multigpu | Improvement |
 | --- | --- | --- | --- | --- |
-| 1 slot - prefill | 5k | TBD | TBD | TBD |
-| 1 slot - generate | 5k | TBD | TBD | TBD |
-| 1 slot - prefill | 50k | TBD | TBD | TBD |
-| 1 slot - generate | 50k | TBD | TBD | TBD |
-| 1 slot - prefill | 150k | TBD | TBD | TBD |
-| 1 slot - generate | 150k | TBD | TBD | TBD |
-| 1 slot - prefill | 200k | TBD | TBD | TBD |
-| 1 slot - generate | 200k | TBD | TBD | TBD |
-| 1 slot - prefill | 250k | TBD | TBD | TBD |
-| 1 slot - generate | 250k | TBD | TBD | TBD |
-| 5 slots - concurrent prefill | 5k | TBD | TBD | TBD |
-| 5 slots - concurrent generate | 5k | TBD | TBD | TBD |
-| 5 slots - concurrent prefill | 50k | TBD | TBD | TBD |
-| 5 slots - concurrent generate | 50k | TBD | TBD | TBD |
-| 5 slots - concurrent prefill | 150k | TBD | TBD | TBD |
-| 5 slots - concurrent generate | 150k | TBD | TBD | TBD |
-| 5 slots - concurrent prefill | 200k | TBD | TBD | TBD |
-| 5 slots - concurrent generate | 200k | TBD | TBD | TBD |
-| 5 slots - concurrent prefill | 250k | TBD | TBD | TBD |
-| 5 slots - concurrent generate | 250k | TBD | TBD | TBD |
+| 1 slot - prefill | 5k | 715 | 1249 | 1.75x (+534 t/s) |
+| 1 slot - generate | 5k | 38.5 | 45.9 | 1.19x (+7.4 t/s) |
+| 1 slot - prefill | 50k | 568 | 2127 | 3.75x (+1560 t/s) |
+| 1 slot - generate | 50k | 25.7 | 41.9 | 1.63x (+16.2 t/s) |
+| 1 slot - prefill | 150k | 368 | 2152 | 5.86x (+1785 t/s) |
+| 1 slot - generate | 150k | 14.1 | 37.8 | 2.69x (+23.7 t/s) |
+| 1 slot - prefill | 200k | 315 | 2122 | 6.73x (+1806 t/s) |
+| 1 slot - generate | 200k | 11.9 | 36.6 | 3.07x (+24.7 t/s) |
+| 1 slot - prefill | 250k | 263 | 2111 | 8.02x (+1848 t/s) |
+| 1 slot - generate | 250k | 10.2 | 33.7 | 3.29x (+23.5 t/s) |
+| 5 slots - concurrent - prefill | 5k | 630 (388/slot) | 2120 (681/slot) | 3.37x (+1491 t/s) |
+| 5 slots - concurrent - generate | 5k | 77.3 (18.2/slot) | 175.2 (42.3/slot) | 2.27x (+97.9 t/s) |
+| 5 slots - concurrent - prefill | 50k | 574 (526/slot) | 2301 (1511/slot) | 4.01x (+1727 t/s) |
+| 5 slots - concurrent - generate | 50k | 34.8 (8.1/slot) | 153.3 (38.3/slot) | 4.41x (+118.5 t/s) |
+| 5 slots - concurrent - prefill | 150k | 363 (353/slot) | 2251 (1993/slot) | 6.20x (+1888 t/s) |
+| 5 slots - concurrent - generate | 150k | 15.8 (3.6/slot) | 123.1 (32.4/slot) | 7.78x (+107.2 t/s) |
+| 5 slots - concurrent - prefill | 200k | 307 (300/slot) | 2180 (1977/slot) | 7.11x (+1873 t/s) |
+| 5 slots - concurrent - generate | 200k | 11.6 (2.8/slot) | 105.9 (29.0/slot) | 9.13x (+94.3 t/s) |
+| 5 slots - concurrent - prefill | 250k | 265 (261/slot) | 2060 (1928/slot) | 7.77x (+1795 t/s) |
+| 5 slots - concurrent - generate | 250k | 9.1 (2.3/slot) | 98.0 (27.3/slot) | 10.79x (+88.9 t/s) |
 
-Prior informal observations on this class of workload were in the rough range of 2x-5x depending on
-workload and slot count. That statement is **not** a result: it predates the benchmark protocol above
-and will be replaced by measured numbers or removed.
+Reading the table: upstream's prefill rate falls with context (715 → 263 t/s from 5k to 250k) and its
+decode rate collapses at depth and under concurrency (2.3 t/s per slot at five × 250k); the patched build
+holds ~2100 t/s prefill at every depth and 27–46 t/s per slot of decode. The gains are therefore largest
+exactly where the workload lives — long contexts, several sessions — and smallest at 5k single-slot
+(1.2× decode). These numbers are for this machine's constrained-PCIe topology; see [§9](#9-known-limitations).
 
 Mixed prefill + generation is deliberately absent from the headline table and is documented separately
 in [docs/multigpu/benchmarks.md#mixed-workload-behavior](docs/multigpu/benchmarks.md#mixed-workload-behavior).
@@ -140,10 +147,10 @@ Fields marked `TBD` are not yet measured; nothing here is estimated.
 | Per-GPU PCIe width (idle) | GPU0 x8, GPU1 x8, GPU2 x4, GPU3 x2, GPU4 x4, GPU5 x4 |
 | PCIe generation, LnkCap vs LnkSta under load | TBD (needs `sudo lspci -vv` re-measurement; idle links negotiate Gen1 in P8) |
 | NUMA | 1 NUMA node exposed |
-| CUDA toolkit on the benchmark host | TBD (no host `nvcc`; builds so far done outside this box) |
-| Compiler / toolchain | TBD |
+| CUDA toolkit on the benchmark host | none on the host; builds run in `nvidia/cuda:12.4.1-devel-ubuntu22.04` (nvcc 12.4.131) via `.devops/cuda.Dockerfile` |
+| Compiler / toolchain | gcc 12, cmake 3.22 (Ubuntu 22.04 build image), Docker 20.10.24 |
 | Model file(s) | `Qwen3.8-Flash-Next-UD-Q4_K_XL-0000{1,2,3,4}-of-00004.gguf`, ~111.3 GB total |
-| Server command line, quant, batch, split-mode, env | TBD (recorded per run) |
+| Server command line, quant, batch, split-mode, env | recorded per run in [docs/multigpu/benchmarks.md](docs/multigpu/benchmarks.md#results) (2026-10-05 grid: 5 slots × 262144, `q8_0` KV, `-b 2048 -ub 512`, layer split, PLE on CPU) |
 
 The constrained-PCIe topology is not incidental: it is the condition under which several of these
 patches produce their effect. Results from this machine should not be assumed to transfer to systems
@@ -330,8 +337,7 @@ surface has stopped being useful for its actual purpose. Building and packaging:
 Ongoing optimization work. Patchset: 47 commits, in production use on machine-01 since 2026-10-05
 (validated there with the owner's own gate suite: 5-user coherence at 200k context, mixed prefill +
 decode, client aborts, cache restore, 15-minute soak); benchmark protocol, CI and validation tiers
-defined; published benchmark numbers: `TBD` (the protocol run is scheduled, see
-[docs/multigpu/benchmarks.md](docs/multigpu/benchmarks.md)); Tier B in public CI: **not run yet**
+defined; benchmark numbers published 2026-10-05 ([§4](#4-performance-summary)); Tier B in public CI: **not run yet**
 ([§6](#6-downloads)).
 
 **Success condition.** When upstream llama.cpp reaches roughly equivalent performance for these

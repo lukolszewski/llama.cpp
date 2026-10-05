@@ -18,8 +18,8 @@ Values below were read from the machine on **2026-10-04**. `TBD` = not measured.
 | Motherboard | ASUS ProArt X670E-CREATOR WIFI (ASUSTeK COMPUTER INC.) | `/sys/class/dmi/id/board_name` |
 | NVIDIA driver | 595.99.02 | `nvidia-smi` |
 | Driver-reported CUDA | 13.2 | `nvidia-smi` |
-| CUDA toolkit / `nvcc` | TBD — no `nvcc` on `PATH` at snapshot time; Docker 20.10.24 present | `command -v nvcc`, `docker --version` |
-| Compiler / CMake / Ninja | TBD | |
+| CUDA toolkit / `nvcc` | builds run in `nvidia/cuda:12.4.1-devel-ubuntu22.04` (nvcc 12.4.131) via `.devops/cuda.Dockerfile`; no host `nvcc`; Docker 20.10.24 + buildx 0.36.1 | image build logs |
+| Compiler / CMake / Ninja | gcc 12 (`GCC_VERSION=12`), cmake from Ubuntu 22.04 (3.22) inside the build image | `.devops/cuda.Dockerfile` |
 | Persistence mode | Off on all GPUs | `nvidia-smi` |
 | Power cap / cooling | 300 W limit per 3090 as reported; airflow and thermal policy TBD | `nvidia-smi` |
 

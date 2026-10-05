@@ -1,8 +1,8 @@
 # Benchmark methodology and results
 
 Benchmarks are the reason this fork exists: a performance claim without a measured number, a named
-upstream revision and a named machine is not a result. **No results are published yet.** The structure
-below is what future numbers will fill in; every `TBD` means "not measured", never "approximately".
+upstream revision and a named machine is not a result. The machine-01 grid was measured on 2026-10-05
+(results below); every remaining `TBD` means "not measured", never "approximately".
 
 - Headline table: [README §4](../../README.md#4-performance-summary)
 - This document: suites, protocol, metric definitions, machine records, reproduction steps
@@ -135,33 +135,46 @@ The README carries only the headline table; the rest lives here and in `benches/
 ### machine-01
 
 ```
-upstream commit:  TBD (<sha>)
-multigpu commit:  TBD (<sha>)
-model:            Qwen3.8-Flash-Next, UD-Q4_K_XL
+upstream commit:  df03399b885831b2a1603b3abb0d8c156808e363  (df03399b8, built with .devops/cuda.Dockerfile: CUDA 12.4.1, gcc 12, 86-real)
+multigpu commit:  1344895820bf3d5ec14764132ac84fd5494b15d0  (code = e4054f726, image llama.cpp:q8c-p6-cuda124, same recipe)
+model:            Qwen3.8-Flash-Next, UD-Q4_K_XL (unsloth, 4 shards)
+server:           -ngl 99 -ot 'per_layer_token_embd\.weight=CPU' --tensor-split 0.85,1,1,1,1,1 --main-gpu 0
+                  -c 1310720 --parallel 5 -fa on --cache-type-k q8_0 --cache-type-v q8_0 -b 2048 -ub 512 --jinja
+                  (patched adds --prefill-max-partial 2 and the env LLAMA_DECODE_PIPELINE=1 LLAMA_SERVER_GROUPS=5
+                  LLAMA_PIPELINE_PARALLEL=1 GGML_CUDA_GRAPHS_FORCE=1 LLAMA_ATTN_ROT_DISABLE=1; speculation off)
+prompts:          synthetic word lists; actual tokens 4992 / 49678 / 148978 / 198628 / 248278 per slot
+prefill:          one request per slot, n_predict 1, cache_prompt false; TTFT = request wall time
+generate:         128 greedy tokens on the cached prompt (cache_prompt true; prompt_n of the second request = 4)
+measured:         2026-10-05 13:05-17:12, patched grid first (13:05-13:38), upstream second (13:38-17:12);
+                  0 error lines in both server logs; GPU temperature/power sampled before and after each row
+raw data:         benches/multi-gpu/machine-01-7950x-6x3090/2026-10-05-grid-df03399b8-vs-134489582/
 ```
+
+Time to first token at the deepest rows (prefill wall time, five slots at once): upstream 4684 s vs
+patched 603 s at 250k; single slot 945 s vs 118 s.
 
 | Workload | Context | Upstream llama.cpp | llama.cpp-multigpu | Improvement |
 | --- | --- | --- | --- | --- |
-| 1 slot - prefill | 5k | TBD | TBD | TBD |
-| 1 slot - generate | 5k | TBD | TBD | TBD |
-| 1 slot - prefill | 50k | TBD | TBD | TBD |
-| 1 slot - generate | 50k | TBD | TBD | TBD |
-| 1 slot - prefill | 150k | TBD | TBD | TBD |
-| 1 slot - generate | 150k | TBD | TBD | TBD |
-| 1 slot - prefill | 200k | TBD | TBD | TBD |
-| 1 slot - generate | 200k | TBD | TBD | TBD |
-| 1 slot - prefill | 250k | TBD | TBD | TBD |
-| 1 slot - generate | 250k | TBD | TBD | TBD |
-| 5 slots - concurrent prefill | 5k | TBD | TBD | TBD |
-| 5 slots - concurrent generate | 5k | TBD | TBD | TBD |
-| 5 slots - concurrent prefill | 50k | TBD | TBD | TBD |
-| 5 slots - concurrent generate | 50k | TBD | TBD | TBD |
-| 5 slots - concurrent prefill | 150k | TBD | TBD | TBD |
-| 5 slots - concurrent generate | 150k | TBD | TBD | TBD |
-| 5 slots - concurrent prefill | 200k | TBD | TBD | TBD |
-| 5 slots - concurrent generate | 200k | TBD | TBD | TBD |
-| 5 slots - concurrent prefill | 250k | TBD | TBD | TBD |
-| 5 slots - concurrent generate | 250k | TBD | TBD | TBD |
+| 1 slot - prefill | 5k | 715 | 1249 | 1.75x (+534 t/s) |
+| 1 slot - generate | 5k | 38.5 | 45.9 | 1.19x (+7.4 t/s) |
+| 1 slot - prefill | 50k | 568 | 2127 | 3.75x (+1560 t/s) |
+| 1 slot - generate | 50k | 25.7 | 41.9 | 1.63x (+16.2 t/s) |
+| 1 slot - prefill | 150k | 368 | 2152 | 5.86x (+1785 t/s) |
+| 1 slot - generate | 150k | 14.1 | 37.8 | 2.69x (+23.7 t/s) |
+| 1 slot - prefill | 200k | 315 | 2122 | 6.73x (+1806 t/s) |
+| 1 slot - generate | 200k | 11.9 | 36.6 | 3.07x (+24.7 t/s) |
+| 1 slot - prefill | 250k | 263 | 2111 | 8.02x (+1848 t/s) |
+| 1 slot - generate | 250k | 10.2 | 33.7 | 3.29x (+23.5 t/s) |
+| 5 slots - concurrent - prefill | 5k | 630 (388/slot) | 2120 (681/slot) | 3.37x (+1491 t/s) |
+| 5 slots - concurrent - generate | 5k | 77.3 (18.2/slot) | 175.2 (42.3/slot) | 2.27x (+97.9 t/s) |
+| 5 slots - concurrent - prefill | 50k | 574 (526/slot) | 2301 (1511/slot) | 4.01x (+1727 t/s) |
+| 5 slots - concurrent - generate | 50k | 34.8 (8.1/slot) | 153.3 (38.3/slot) | 4.41x (+118.5 t/s) |
+| 5 slots - concurrent - prefill | 150k | 363 (353/slot) | 2251 (1993/slot) | 6.20x (+1888 t/s) |
+| 5 slots - concurrent - generate | 150k | 15.8 (3.6/slot) | 123.1 (32.4/slot) | 7.78x (+107.2 t/s) |
+| 5 slots - concurrent - prefill | 200k | 307 (300/slot) | 2180 (1977/slot) | 7.11x (+1873 t/s) |
+| 5 slots - concurrent - generate | 200k | 11.6 (2.8/slot) | 105.9 (29.0/slot) | 9.13x (+94.3 t/s) |
+| 5 slots - concurrent - prefill | 250k | 265 (261/slot) | 2060 (1928/slot) | 7.77x (+1795 t/s) |
+| 5 slots - concurrent - generate | 250k | 9.1 (2.3/slot) | 98.0 (27.3/slot) | 10.79x (+88.9 t/s) |
 
 Units: tokens/s (aggregate for the 5-slot rows; per-slot values recorded alongside). Improvement is
 reported as a ratio **and** absolute delta, since a 2x on a bad baseline and a 1.2x on a good one mean

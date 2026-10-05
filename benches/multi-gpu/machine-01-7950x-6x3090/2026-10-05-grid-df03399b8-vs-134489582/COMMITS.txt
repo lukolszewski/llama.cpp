@@ -1,0 +1,3 @@
+upstream commit: df03399b885831b2a1603b3abb0d8c156808e363
+multigpu commit: 1344895820bf3d5ec14764132ac84fd5494b15d0 (code identical to e4054f726 = image llama.cpp:q8c-p6-cuda124)
+upstream image: llama.cpp:upstream-df03399b8-cuda124 (same .devops/cuda.Dockerfile recipe: CUDA 12.4.1, gcc 12, 86-real)

@@ -5,7 +5,7 @@ can stay readable while the underlying data remains available.
 
 | directory | machine | status |
 | --- | --- | --- |
-| `machine-01-7950x-6x3090/` | AMD Ryzen 9 7950X + 192 GB + 6 x RTX 3090 (constrained PCIe), Debian 12 | hardware record captured 2026-10-04, **no benchmark results yet** |
+| `machine-01-7950x-6x3090/` | AMD Ryzen 9 7950X + 192 GB + 6 x RTX 3090 (constrained PCIe), Debian 12 | hardware record captured 2026-10-04, **grid measured 2026-10-05** (`2026-10-05-grid-…/`) |
 | `machine-02-TBD/` | reserved, candidate: multiple RTX 4090 | does not exist until the machine is provisioned |
 | `machine-03-TBD/` | reserved, candidate: multiple RTX 5090 (`sm_120`) | does not exist until the machine is provisioned |
 
@@ -22,5 +22,4 @@ Rules:
 This layout follows the existing upstream convention (`benches/dgx-spark/`, `benches/nemotron/`,
 `benches/mac-m2-ultra/`).
 
-Nothing in these directories has been measured yet — the repository is currently in the
-"structure defined, numbers `TBD`" state on purpose, rather than publishing unverified figures.
+machine-01 holds the first measured grid (2026-10-05); machine-02/03 do not exist yet.
