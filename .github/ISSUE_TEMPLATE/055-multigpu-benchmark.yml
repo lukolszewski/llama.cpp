@@ -1,0 +1,127 @@
+name: Benchmark submission (other multi-GPU hardware)
+description: Reproduction of the llama.cpp-multigpu benchmark suites on a machine the maintainers do not have - e.g. multiple RTX 4090 or RTX 5090.
+title: "Bench: "
+labels: ["benchmark", "hardware"]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Results from hardware we cannot reach are the only way to know whether these patches generalize
+        or only help the specific constrained-PCIe topology they were written against. Please submit a
+        **complete** run: a number without its machine, its two commit hashes and its configuration
+        cannot be used.
+
+
+        Protocol: [`docs/multigpu/benchmarks.md`](https://github.com/lukolszewski/llama.cpp/blob/multigpu/docs/multigpu/benchmarks.md).
+        Scripts: `scripts/multigpu/bench/` (`env-snapshot.sh`, `run-single-slot.sh`, `run-5-slot.py`).
+        Raw output belongs in a new `benches/multi-gpu/<machine>/` directory - never merged into
+        another machine's table.
+  - type: markdown
+    attributes:
+      value: "## Machine"
+  - type: input
+    id: machine-name
+    attributes:
+      label: Suggested machine identifier
+      description: e.g. machine-02-2x4090, machine-03-8x5090
+      placeholder: "machine-02-4x-rtx-4090"
+    validations:
+      required: true
+  - type: textarea
+    id: snapshot
+    attributes:
+      label: Environment snapshot
+      description: >
+        Paste the output of `scripts/multigpu/env-snapshot.sh` (it captures OS, kernel, CPU, NUMA,
+        driver, CUDA, nvidia-smi, `nvidia-smi topo -m`, NVLink state and PCIe link widths). Run it while
+        a server is under load as well if you can: idle GPUs negotiate down, and idle link widths would
+        misdescribe the machine.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: interconnect
+    attributes:
+      label: GPU interconnect summary
+      description: GPU model/count, PCIe generation and width actually negotiated per GPU, NVLink present or not
+      placeholder: "4 x RTX 4090 at x8 Gen4 (root-complex shared), no NVLink"
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: "## Revisions"
+  - type: input
+    id: multigpu-commit
+    attributes:
+      label: multigpu commit
+      description: from BUILD_INFO.json in the archive you used
+    validations:
+      required: true
+  - type: input
+    id: upstream-commit
+    attributes:
+      label: upstream llama.cpp commit compared against
+      description: an unversioned "upstream" is not a usable baseline - llama.cpp moves daily
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: "## Run configuration"
+  - type: textarea
+    id: config
+    attributes:
+      label: Model, quantization, server command line, env vars, slots, context sizes, batch settings, split mode
+      render: sh
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: "## Results"
+  - type: textarea
+    id: results
+    attributes:
+      label: Results table
+      description: >
+        Use the table shape from docs/multigpu/benchmarks.md. Single-slot rows (prefill and generate)
+        and five-slot concurrent rows (prefill and generate separately) for each of 5k/50k/150k/200k/250k.
+        Report aggregate **and** per-slot tokens/s, plus time to first token. Write `TBD` for anything
+        you did not measure - never estimate or fill in a plausible number.
+      placeholder: |
+        | Workload | Context | Upstream | multigpu | Improvement |
+        | --- | --- | --- | --- | --- |
+        | 1 slot - prefill | 50k | 980 t/s | 2450 t/s | 2.5x (+1470) |
+        | 1 slot - generate | 50k | TBD | TBD | TBD |
+    validations:
+      required: true
+  - type: checkboxes
+    id: coverage
+    attributes:
+      label: Suite coverage
+      options:
+        - label: single-slot prefill at all five sizes
+          required: false
+        - label: single-slot generation at all five sizes
+          required: false
+        - label: five-slot concurrent prefill
+          required: false
+        - label: five-slot concurrent generation
+          required: false
+        - label: mixed prefill + generation (planned, no suite yet - only if you designed your own)
+          required: false
+  - type: textarea
+    id: regressions
+    attributes:
+      label: Regressions or costs you observed
+      description: >
+        Equally important as the wins. Did any switch make a workload slower on your hardware? Note that
+        the switch-selected patches can be neutral or harmful outside the constrained-PCIe case they were
+        written for. Also list VRAM per device if a patch increased it.
+    validations:
+      required: false
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes on reproducibility
+      description: Thermal state, power caps, other processes running, how many repetitions, run-to-run spread
+    validations:
+      required: false

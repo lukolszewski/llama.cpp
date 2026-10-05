@@ -1,5 +1,15 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Generic llama.cpp bug or feature request
+    url: https://github.com/ggml-org/llama.cpp/issues/new/choose
+    about: >
+      This repository is a temporary downstream performance fork focused on Qwen3.8-Flash-Next on
+      consumer multi-GPU systems. If your problem reproduces on upstream llama.cpp and is unrelated to
+      the downstream performance patches, upstream is the correct place to report it - and general
+      llama.cpp feature requests belong there too.
+  - name: Upstream multi-GPU documentation
+    url: https://github.com/ggml-org/llama.cpp/blob/master/docs/multi-gpu.md
+    about: Split modes, tensor placement and per-device memory are upstream llama.cpp behaviour; this fork only patches performance around them.
   - name: Got an idea?
     url: https://github.com/ggml-org/llama.cpp/discussions/categories/ideas
     about: Pop it there. It may then become an enhancement ticket.

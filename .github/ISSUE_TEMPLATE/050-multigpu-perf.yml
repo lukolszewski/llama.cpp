@@ -1,0 +1,188 @@
+name: Multi-GPU performance report (llama.cpp-multigpu)
+description: A workload is slower, unchanged, or regressed on a consumer multi-GPU system - or a patch helps here and should be tested elsewhere.
+title: "Perf: "
+labels: ["performance", "unconfirmed"]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        This repository is a **temporary downstream performance fork of llama.cpp** carrying targeted
+        patches for Qwen3.8-Flash-Next on consumer multi-GPU systems, particularly machines with
+        constrained or shared PCIe links.
+
+
+        Please fill in **hardware and topology** - on this class of machine the PCIe path is not a
+        footnote, it is the variable that decides the result.
+
+
+        First check whether the problem reproduces on **upstream llama.cpp**
+        (<https://github.com/ggml-org/llama.cpp>) at a named commit. If it reproduces upstream and has
+        nothing to do with the downstream patches, upstream is the right place to report it. If you are
+        simply asking for a feature that is not a performance fix in this scope, please use upstream
+        too.
+  - type: markdown
+    attributes:
+      value: "## Revisions"
+  - type: input
+    id: multigpu-commit
+    attributes:
+      label: llama.cpp-multigpu commit
+      description: The commit of the patched branch you ran (see BUILD_INFO.txt in a downloaded archive, or `git rev-parse HEAD`)
+      placeholder: "1ca80a510944f33507d1520202eedeacad7d45e7"
+    validations:
+      required: true
+  - type: input
+    id: upstream-commit
+    attributes:
+      label: Upstream base / comparison commit
+      description: The upstream llama.cpp revision your build sits on, and the revision you compared against. `upstream_base_commit` is in BUILD_INFO.json.
+      placeholder: "df03399b8 (base); compared against <sha>"
+    validations:
+      required: true
+  - type: dropdown
+    id: artifact
+    attributes:
+      label: How did you obtain the binaries
+      options:
+        - Downloaded a release archive
+        - Built from source
+        - Docker image
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: archive
+    attributes:
+      label: Release archive name
+      description: e.g. llama.cpp-multigpu-20261004+1ca80a5-bin-ubuntu-cuda-12.8-x64.tar.gz (or "self-built")
+    validations:
+      required: false
+  - type: markdown
+    attributes:
+      value: "## Hardware"
+  - type: input
+    id: gpus
+    attributes:
+      label: GPU models and count
+      description: Which GPUs participate in the run, and how many
+      placeholder: "6 x RTX 3090 (24 GB), plus 1 x RTX 5060 Ti unused as display GPU"
+    validations:
+      required: true
+  - type: input
+    id: topology
+    attributes:
+      label: Motherboard and PCIe topology
+      description: >
+        Motherboard model; the PCIe generation and **link width** each GPU actually negotiates
+        (`sudo lspci -vv | grep -A2 LnkSta`); the output of `nvidia-smi topo -m`; whether NVLink is
+        present; NUMA configuration. Link widths on consumer boards are often x8/x4/x2 rather than x16
+        - that is precisely the condition this fork targets, so please be specific.
+      placeholder: |
+        ASUS ProArt X670E-CREATOR WIFI
+        GPU0 x8 (NVLink to GPU1), GPU1 x8, GPU2 x4, GPU3 x2, GPU4 x4, GPU5 x4
+        nvidia-smi topo -m: PHB for most pairs
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: CPU, RAM, OS, kernel
+      placeholder: "Ryzen 9 7950X, 192 GB DDR5 (4x48, JEDEC), Debian 12, kernel 6.12.9"
+    validations:
+      required: true
+  - type: input
+    id: driver
+    attributes:
+      label: NVIDIA driver and CUDA version
+      description: "`nvidia-smi` header, plus the CUDA toolkit used to build if known"
+      placeholder: "Driver 595.99.02, driver-reported CUDA 13.2, built with CUDA 12.8"
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: "## Model and workload"
+  - type: input
+    id: model
+    attributes:
+      label: Model, quantization and file(s)
+      description: For split GGUFs list the shards. The primary target is Qwen3.8-Flash-Next (llama.cpp arch `qwen4exp`), `unsloth/Qwen3.8-Flash-Next-GGUF`, `UD-Q4_K_XL`.
+      placeholder: "Qwen3.8-Flash-Next UD-Q4_K_XL, 4 shards, ~111.3 GB"
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Exact command line and environment variables
+      description: >
+        Include the full `llama-server` / `llama-cli` command line, the environment variables that
+        select the downstream switches (`LLAMA_DECODE_PIPELINE`, `LLAMA_QSA_BIAS_DEVICE`,
+        `LLAMA_KQ_MASK_DEVICE`, `GGML_SCHED_STAGE_INPUTS`, `GGML_SCHED_N_COPIES`, ...), and the server
+        flags (`--prefill-max-partial`, `--prefill-long-threshold`, `--prefill-max-long`,
+        `--seq-compact`). Without the switch state a measurement here cannot be attributed to a patch.
+      render: sh
+    validations:
+      required: true
+  - type: dropdown
+    id: slots
+    attributes:
+      label: Active slots
+      description: The fork targets several concurrent sessions for one user/workload owner (e.g. -np 5), not arbitrary multi-tenant serving
+      multiple: true
+      options:
+        - 1 slot
+        - 2 slots
+        - 3 slots
+        - 5 slots (benchmark configuration)
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Which phase is affected
+      multiple: true
+      options:
+        - Prompt processing / prefill
+        - Token generation
+        - Time to first token
+        - Mixed prefill + generation (known weak spot)
+        - Memory / VRAM usage
+        - Crash during startup
+    validations:
+      required: true
+  - type: textarea
+    id: results
+    attributes:
+      label: Measured numbers
+      description: >
+        A reproducible measurement, not a feeling. Include tokens/s for both prefill and generation,
+        aggregate and per-slot if several slots were active, plus the context/prompt size (the
+        benchmark suite uses 5k / 50k / 150k / 200k / 250k). If you compared against upstream or against
+        a different switch state, show both sets of numbers from the same machine and the same model
+        file.
+      placeholder: |
+        patched   pp 50k: 1830 t/s aggregate, 366 t/s per slot; tg: ...
+        upstream  pp 50k:  ...
+    validations:
+      required: true
+  - type: checkboxes
+    id: validation
+    attributes:
+      label: Validation state you are reporting against
+      description: Public CI has no GPU, so only some configurations are runtime-validated by the
+        maintainers. Untested configurations ship as ordinary llama.cpp builds and your report is the
+        evidence.
+      options:
+        - label: I know this artifact was **not** runtime-validated by the maintainers (anything except Linux x86-64 / CUDA 12.8 / sm_86)
+          required: false
+        - label: I ran the same workload on upstream llama.cpp at a named commit for comparison
+          required: false
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: >
+        Does a patch appear to hurt a different workload or hardware configuration? Say so explicitly -
+        these patches are not claimed to be universally beneficial, and knowing where they regress is as
+        valuable as knowing where they help. Include VRAM per device and GPU temperatures/power caps if
+        you captured them.
