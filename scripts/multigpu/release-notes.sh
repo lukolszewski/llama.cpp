@@ -49,7 +49,7 @@ CMAKE_VER="$(get cmake)"
 OS_VER="$(get os)"
 PATCH_COUNT="$(python3 -c "import json,sys;print(len(json.load(open(sys.argv[1])).get('patches',[])))" "$JSON")"
 
-REPO_URL="https://github.com/${GITHUB_REPOSITORY:-lukolszewski/llama.cpp}"
+REPO_URL="https://github.com/${GITHUB_REPOSITORY:-lukolszewski/llama.cpp-multigpu}"
 
 cat <<EOF
 **llama.cpp-multigpu** is a temporary downstream performance fork of
@@ -126,7 +126,7 @@ for p in d.get("patches", []):
     print("| `%s` | %s |" % (p.get("commit", "TBD"), p.get("subject", "TBD")))
 PY
 echo
-echo "Per-patch description, runtime switches and removal criteria: [docs/multigpu/patches.md](https://github.com/${GITHUB_REPOSITORY:-lukolszewski/llama.cpp}/blob/multigpu/docs/multigpu/patches.md)."
+echo "Per-patch description, runtime switches and removal criteria: [docs/multigpu/patches.md](https://github.com/${GITHUB_REPOSITORY:-lukolszewski/llama.cpp-multigpu}/blob/multigpu/docs/multigpu/patches.md)."
 echo "The individual patches are also attached as a \`-patches.tar.gz\` \`git format-patch\` export, so you"
 echo "can build upstream llama.cpp plus only the patches you want."
 echo
@@ -137,8 +137,8 @@ cat <<'EOF'
 **No performance numbers are published yet** — the benchmark runs have not been executed. The table
 structure, protocol and hardware record exist and every result cell is `TBD`:
 
-- [docs/multigpu/benchmarks.md](https://github.com/lukolszewski/llama.cpp/blob/multigpu/docs/multigpu/benchmarks.md)
-- [machine-01 hardware record](https://github.com/lukolszewski/llama.cpp/blob/multigpu/benches/multi-gpu/machine-01-7950x-6x3090/hardware.md)
+- [docs/multigpu/benchmarks.md](https://github.com/lukolszewski/llama.cpp-multigpu/blob/multigpu/docs/multigpu/benchmarks.md)
+- [machine-01 hardware record](https://github.com/lukolszewski/llama.cpp-multigpu/blob/multigpu/benches/multi-gpu/machine-01-7950x-6x3090/hardware.md)
 
 Published numbers will always name the upstream commit, the multigpu commit, the machine, the model +
 quantization and the full server configuration. Informally observed speedups on this class of workload

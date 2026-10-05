@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-REPO="${GITHUB_REPOSITORY:-lukolszewski/llama.cpp}"
+REPO="${GITHUB_REPOSITORY:-lukolszewski/llama.cpp-multigpu}"
 KEEP_PREFIX="${KEEP_PREFIX:-multigpu-}"
 ACTION="disable"
 DRY=""

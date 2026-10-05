@@ -12,7 +12,7 @@ body:
         cannot be used.
 
 
-        Protocol: [`docs/multigpu/benchmarks.md`](https://github.com/lukolszewski/llama.cpp/blob/multigpu/docs/multigpu/benchmarks.md).
+        Protocol: [`docs/multigpu/benchmarks.md`](https://github.com/lukolszewski/llama.cpp-multigpu/blob/multigpu/docs/multigpu/benchmarks.md).
         Scripts: `scripts/multigpu/bench/` (`env-snapshot.sh`, `run-single-slot.sh`, `run-5-slot.py`).
         Raw output belongs in a new `benches/multi-gpu/<machine>/` directory - never merged into
         another machine's table.
