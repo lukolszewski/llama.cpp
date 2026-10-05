@@ -51,7 +51,17 @@ architectures may benefit from the scheduler and graph changes, but that has not
 
 Multi-token-prediction (MTP) drafts from the same Hugging Face repository are **out of scope**: they
 help little in the single-user case and cost throughput in the multi-slot case, which is the opposite
-of what this fork optimizes for.
+of what this fork optimizes for. What *is* in: **n-gram lookup speculation** (prompt lookup decoding —
+no draft model; repeats of the context such as code being rewritten, quotes or lists are proposed and
+verified in one batch, output identical to greedy), made to work with the decode groups and capped by
+default to at most two concurrently generating users, because a draft round costs every user a graph
+re-plan. Measured on machine-01, solo, 1500 greedy tokens: code rewrite 44 → 111 t/s, prose with quotes
+45 → 49, repetitive lists 45 → 75; with three or more users it is off and nothing changes.
+
+The reference configuration (what runs on machine-01 since 2026-10-05): 5 slots × 262144 context,
+`q8_0` KV cache, `-fa on`, `-b 2048 -ub 512`, layer split over six GPUs with the per-layer token embedding
+on the CPU, decode groups = 5, prefill chunked beside decoders, asynchronous prompt-cache save/restore,
+lookup speculation capped at 2 users.
 
 ## 3. Why this fork exists
 
@@ -182,17 +192,26 @@ exist. The complete switch table — default, effect, introducing commit — is 
 [docs/multigpu/patches.md](docs/multigpu/patches.md). The main ones:
 
 ```sh
-# single user, several concurrent sessions, 5 slots
-LLAMA_DECODE_PIPELINE=1 \
+# one user, several concurrent sessions, 5 slots x 262k on 6 GPUs (the machine-01 production shape)
+LLAMA_DECODE_PIPELINE=1 LLAMA_SERVER_GROUPS=5 \
+LLAMA_PIPELINE_PARALLEL=1 GGML_CUDA_GRAPHS_FORCE=1 LLAMA_ATTN_ROT_DISABLE=1 \
+LLAMA_SERVER_SPEC_MAX_USERS=2 \
 llama-server \
   -m Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf \
-  -ngl 99 -sm layer -fa on -np 5 \
-  --ctx-size 200000 \
-  --prefill-max-partial 1 --prefill-max-long 1
+  -ngl 99 -sm layer -fa on -np 5 -c 1310720 \
+  --cache-type-k q8_0 --cache-type-v q8_0 -b 2048 -ub 512 \
+  -ot 'per_layer_token_embd\.weight=CPU' --tensor-split 0.85,1,1,1,1,1 \
+  --prefill-max-partial 2 --cache-ram 81920 \
+  --spec-type ngram-map-k4v
 ```
 
+- `LLAMA_SERVER_GROUPS=5` (default `1` = off) — continuous per-sequence decode: the slots form pipelined
+  groups whose batches overlap across the GPUs; this is the single largest multi-user gain (5 users at
+  58k context: 17 → 34 t/s each on machine-01). Requires `LLAMA_DECODE_PIPELINE=1`.
 - `LLAMA_DECODE_PIPELINE=1` (default `0`) — split a pure multi-sequence decode batch into per-sequence
   ubatches and run them through a stream-agnostic decode graph.
+- `--spec-type ngram-map-k4v` with `LLAMA_SERVER_SPEC_MAX_USERS=2` — lookup speculation for one or two
+  active users; leave it off if the server is mostly busy with 3+ sessions (it is then off anyway).
 - `--prefill-max-partial N` (default `1`) — how many slots may prefill within one batch; with `1`, the
   first slot takes the whole batch and the others wait rather than thrashing the shared PCIe links.
 - `--prefill-long-threshold N` / `--prefill-max-long N` — admit at most N "long" prompts concurrently,
@@ -232,10 +251,12 @@ Summarized here; specified in [docs/multigpu/benchmarks.md](docs/multigpu/benchm
   universally correct, which is precisely why this is a targeted downstream patchset and not an
   assertion about llama.cpp in general. Benchmark documentation always names the tested hardware.
 - **PCIe topology matters.** Constrained/shared links are the condition these patches address.
-- **Mixed prefill + generation is currently not ideal.** Prefill and generation interfere with each
-  other, so latency under concurrent prefill-while-generating is worse than the all-prefill or
-  all-generate numbers suggest. This limitation is published rather than hidden by cherry-picking the
-  favourable workloads.
+- **Mixed prefill + generation is better than it was, and still documented separately.** Prompts are
+  prefilled in 256-token chunks beside the decoding slots (patches 28–36); on machine-01 two users
+  decoding at 58k context while a 200k prompt is prefilled see ~280 ms between tokens instead of 1.3 s,
+  and the prefill itself runs at roughly 60–70 % of its solo rate. Latency under concurrent
+  prefill-while-generating is still worse than the all-prefill or all-generate numbers suggest, and it
+  is published rather than hidden by cherry-picking the favourable workloads.
 - **Intended serving model is multi-session single-user**, not multi-tenant: one person or workload
   owner running several concurrent sessions (several agent sessions, coding-agent tasks, independent
   chats, parallel research jobs). It is not currently a good fit for arbitrary unrelated requests
@@ -306,8 +327,11 @@ surface has stopped being useful for its actual purpose. Building and packaging:
 
 ## 14. Project status
 
-Ongoing optimization work. Patchset present and building; benchmark protocol, CI and validation tiers
-defined; published benchmark numbers: `TBD`; Tier B runtime validation: **not run yet**
+Ongoing optimization work. Patchset: 47 commits, in production use on machine-01 since 2026-10-05
+(validated there with the owner's own gate suite: 5-user coherence at 200k context, mixed prefill +
+decode, client aborts, cache restore, 15-minute soak); benchmark protocol, CI and validation tiers
+defined; published benchmark numbers: `TBD` (the protocol run is scheduled, see
+[docs/multigpu/benchmarks.md](docs/multigpu/benchmarks.md)); Tier B in public CI: **not run yet**
 ([§6](#6-downloads)).
 
 **Success condition.** When upstream llama.cpp reaches roughly equivalent performance for these

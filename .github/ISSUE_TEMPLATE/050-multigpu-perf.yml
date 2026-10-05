@@ -28,7 +28,7 @@ body:
     attributes:
       label: llama.cpp-multigpu commit
       description: The commit of the patched branch you ran (see BUILD_INFO.txt in a downloaded archive, or `git rev-parse HEAD`)
-      placeholder: "1ca80a510944f33507d1520202eedeacad7d45e7"
+      placeholder: "e4054f726c14dfd8bb36dfb868863bf2c0aeff4a"
     validations:
       required: true
   - type: input
