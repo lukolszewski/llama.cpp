@@ -211,7 +211,13 @@ fetch_upstream() {
   if [ -x "$UPSTREAM_DIR/llama-server" ]; then log ">> upstream: $UPSTREAM_DIR/llama-server present"; return 0; fi
   log ">> upstream: fetching $UPSTREAM_TARBALL_URL"
   mkdir -p "$UPSTREAM_DIR"
-  curl -fsSL --retry 5 --retry-delay 10 -o /tmp/upstream.tar.gz "$UPSTREAM_TARBALL_URL" || fail "cannot download the upstream baseline tarball ($UPSTREAM_TARBALL_URL); build it with .github/workflows/multigpu-baseline.yml or set UPSTREAM_TARBALL_URL"
+  # The baseline prerelease may still be building when the patched side finishes: poll for it (UPSTREAM_WAIT s).
+  local waited=0
+  until curl -fsSL --retry 3 --retry-delay 10 -o /tmp/upstream.tar.gz "$UPSTREAM_TARBALL_URL"; do
+    waited=$((waited + 60))
+    [ "$waited" -le "${UPSTREAM_WAIT:-3600}" ] || fail "upstream baseline tarball not available after ${UPSTREAM_WAIT:-3600}s ($UPSTREAM_TARBALL_URL); build it with .github/workflows/multigpu-baseline.yml or set UPSTREAM_TARBALL_URL"
+    log "   upstream tarball not there yet (${waited}s), retrying in 60 s"; sleep 60
+  done
   tar -xzf /tmp/upstream.tar.gz -C "$UPSTREAM_DIR" --strip-components=1 || fail "upstream tarball did not extract"
   rm -f /tmp/upstream.tar.gz
   [ -x "$UPSTREAM_DIR/llama-server" ] || fail "no llama-server in the upstream tarball"
