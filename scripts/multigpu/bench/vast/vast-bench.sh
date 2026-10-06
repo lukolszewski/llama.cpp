@@ -135,7 +135,7 @@ ssh_target() {   # prints "port host" for the instance
   [[ "$url" =~ ssh://([^@]+)@([^:]+):([0-9]+) ]] || return 1
   echo "${BASH_REMATCH[3]} ${BASH_REMATCH[2]}"
 }
-SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ServerAliveInterval=30)
+SSH_OPTS=(-o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ServerAliveInterval=30)
 rssh() { local id="$1"; shift; local t; t="$(ssh_target "$id")" || return 255; set -- "$@"; ssh "${SSH_OPTS[@]}" -i "$SSH_KEY" -p ${t%% *} root@${t##* } "$@"; }
 
 destroy_instance() {

@@ -27,7 +27,12 @@ LABEL org.opencontainers.image.created=$BUILD_DATE \
 # visible; openssh-server: Vast.ai's ssh launch mode installs it at boot otherwise (minutes of billed time).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends aria2 python3 pciutils jq openssh-server procps \
-    && apt-get clean -y && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+    && apt-get clean -y && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
+    && mkdir -p /run/sshd /root/.ssh && chmod 700 /root/.ssh \
+    && sed -i -e 's/^#\?StrictModes.*/StrictModes no/' -e 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' \
+              -e 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+# StrictModes no: Vast.ai's launcher writes /root/.ssh/authorized_keys with modes that stock sshd rejects
+# ("bad ownership or modes", seen 2026-10-06); the box is single-tenant and short-lived, key-only login stays.
 
 COPY scripts/multigpu/bench/vast/entrypoint.sh scripts/multigpu/bench/vast/download-model.sh \
      scripts/multigpu/bench/vast/healthcheck.sh scripts/multigpu/bench/vast/collect-hardware.py \
