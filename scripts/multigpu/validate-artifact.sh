@@ -116,7 +116,8 @@ export LD_LIBRARY_PATH="$BINDIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 if "$BIN" --version > "$WORKDIR/version.txt" 2>&1; then
     note "llama-server --version: $(head -1 "$WORKDIR/version.txt")"
     if [ -n "$UPSTREAM_BUILD" ] && [ -n "$EXPECT_COMMIT" ]; then
-        vh="$(grep -oE '\(([0-9a-f]{7,40})\)' "$WORKDIR/version.txt" | head -1 | tr -d '()')"
+        # upstream prints "version: 0.4.0-dev (build 10902, commit df03399b8)"; older builds "(df03399b8)"
+        vh="$(grep -oE '(commit |\()[0-9a-f]{7,40}\)' "$WORKDIR/version.txt" | head -1 | grep -oE '[0-9a-f]{7,40}' || true)"
         case "$EXPECT_COMMIT" in "$vh"*) [ -n "$vh" ] && note "--version commit $vh matches $EXPECT_COMMIT" || bad "no commit hash in --version output";; *) bad "--version commit $vh != expected $EXPECT_COMMIT";; esac
     fi
 else
