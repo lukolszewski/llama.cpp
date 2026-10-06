@@ -211,7 +211,8 @@ opaque binaries: if you can name the archive, you can name the source revision.
 packaging and integrity (Tier A: archive unpacks, binaries run, the declared SASS/PTX targets are really
 embedded, downstream flags are wired, metadata matches the commit) for every artifact. Runtime
 validation on real hardware (Tier B) exists only for Linux / `sm_86` (6 × RTX 3090, the maintainer's
-machine, the same configuration that serves production): both `multigpu-20261006` images served the model
+machine, the same configuration that serves production): both images of the first release (`multigpu-20261006`,
+since withdrawn in favour of `multigpu-20261006.1`, same binaries) served the model
 there with the production flags (details in [docs/multigpu/builds.md](docs/multigpu/builds.md)). Every other architecture in these archives is
 compiled, not run: those builds are ordinary llama.cpp builds, labelled "built and packaging-checked;
 not runtime-validated by us". We do not withhold binaries that people need, and we do not attach test

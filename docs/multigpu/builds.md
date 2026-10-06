@@ -126,8 +126,9 @@ container toolkit mounts it, GeForce GPUs reject it (`ggml_cuda_init: failed to 
 compatibility was attempted on non supported HW`) and llama.cpp silently falls back to the CPU; observed on an
 8 × RTX 4090 host with driver 570 using the `multigpu-20261006` image via the bench image. Both Dockerfiles now
 purge the package, so the host driver's `libcuda` is used (the R525+ minor-version-compatibility path). The
-`multigpu-20261006` images still contain it: on a GeForce host with a driver older than 575 either rebuild or
-run with `-v /dev/null:/usr/local/cuda/compat/libcuda.so.1` (hides the compat library). Fixed from the next release.
+first release (`multigpu-20261006`) shipped images with the package and has been **withdrawn**; its
+`server-cuda*-20261006` image tags remain on ghcr for reference only — use `multigpu-20261006.1` or newer (same
+binaries, compat package removed).
 
 The package was created by the first push with the workflow's `GITHUB_TOKEN` and is public (anonymous
 `docker pull` works); check with `docker manifest inspect ghcr.io/lukolszewski/llama.cpp-multigpu:server-cuda12.9-sm86`
@@ -182,7 +183,7 @@ start a 5-slot server, generate, record the per-device memory split, run one `ll
 that runner is registered, Tier B for a release means the maintainer pulling the `cuda-12.9` image on
 machine-01 and running the smoke there.
 
-**Tier B record for `multigpu-20261006`** (machine-01, 2026-10-06, production flags: 5 slots × 262144, q8_0 KV,
+**Tier B record for `multigpu-20261006`** (release since withdrawn; the `multigpu-20261006.1` binaries are byte-for-byte the same build recipe from the merged commit, images without the compat package) (machine-01, 2026-10-06, production flags: 5 slots × 262144, q8_0 KV,
 groups = 5): `server-cuda12.9-20261006` served the model, 120-token single-user completion at 51 t/s, two
 concurrent users at 49/48 t/s each, zero server errors. `server-cuda13.4-20261006` is refused by the NVIDIA
 container runtime on this host's 595.99 driver (CUDA 13.2 < the image's `cuda>=13.4` requirement); with

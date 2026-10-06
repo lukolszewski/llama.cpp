@@ -63,8 +63,7 @@ general-purpose project; this fork exists to be archived once upstream catches u
 NVIDIA's `cuda:*-runtime` base images ship `cuda-compat-<ver>`, a newer `libcuda` for datacenter GPUs on old
 drivers. On a host whose driver is older than that library the container toolkit uses it, GeForce cards reject it
 (`ggml_cuda_init: failed to initialize CUDA: forward compatibility was attempted on non supported HW`) and
-llama.cpp silently runs on the CPU. Found on an 8 × RTX 4090 host with driver 570 using the `multigpu-20261006`
-images; the package is purged from every image from this release on, so the host driver's `libcuda` is used
-(any R525+ driver for the native targets). If you must run the `multigpu-20261006` images on such a host:
-`-v /dev/null:/usr/local/cuda/compat/libcuda.so.1`. The tarballs were never affected. Details:
+llama.cpp silently runs on the CPU. Found on an 8 × RTX 4090 host with driver 570 using the images of the
+first release (`multigpu-20261006`, withdrawn); the package is purged from every image from `multigpu-20261006.1`
+on, so the host driver's `libcuda` is used (any R525+ driver for the native targets). The tarballs were never affected. Details:
 `docs/multigpu/builds.md`.
