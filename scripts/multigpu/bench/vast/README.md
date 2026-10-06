@@ -140,3 +140,16 @@ Recorded from the rehearsal; see the git history of this file for changes.
   dependency on `vastai copy` semantics).
 - `vastai show user --raw` → `credit` is the balance; the CLI table's "Balance" column shows 0 for this
   account and is not the credit.
+- `vastai destroy instance ID` prompts for confirmation even without a TTY and prints `Aborted.`; always
+  pass `-y`.
+- When the offer disappears between `search` and `create`, Vast silently creates a **stopped** instance
+  (`intended_status: stopped`, `actual_status: loading` forever). `vast-bench.sh` passes `--cancel-unavail`
+  and, if it still happens, tries `vastai start instance` once before giving up.
+- Vast's ssh launcher writes `/root/.ssh/authorized_keys` with modes a stock `sshd` refuses
+  ("Authentication refused: bad ownership or modes", visible in `vastai logs ID`); the bench image sets
+  `StrictModes no` (key-only root login stays). The ssh client must use `IdentitiesOnly=yes`: an agent
+  with several keys trips `MaxAuthTries` before the right key is offered.
+- `vastai execute` only works on **stopped** instances and only for `ls`/`rm`/`du`; `vastai logs ID`
+  (container stdout + sshd log) is the diagnostic channel while it runs.
+- Image pull time on the host varies from 3 to 15+ minutes for this 2.5 GB image; the boot timeout is
+  30 min by default.
