@@ -92,8 +92,23 @@ cat <<'EOT'
 - `cudart-*`: the CUDA runtime + cuBLAS libraries matching each flavour, for hosts without a CUDA toolkit. Unpack next to
   the binaries (or set `LD_LIBRARY_PATH`). The NVIDIA driver (`libcuda.so.1`) always comes from the host.
 - `patches.tar.gz`: the patch series as `git format-patch` output, for building upstream + selected patches.
-- Container images: `ghcr.io/lukolszewski/llama.cpp-multigpu:server-cuda12.9-<tag>` and `:server-cuda13.4-<tag>`
-  (`:latest` = cuda12.9), built from these very archives; run with `--gpus all`, `llama-server` is the entrypoint.
+EOT
+# images: explicit public pull commands for this release (VERSION = tag without the multigpu- prefix)
+VERSION="${TAG#multigpu-}"; IMG="ghcr.io/$(echo "$REPO" | tr 'A-Z' 'a-z')"; UP7="${UP_COMMIT:0:7}"
+cat <<EOT
+- Container images (public, anonymous pull; built from these very archives; \`llama-server\` is the entrypoint, run
+  with \`--gpus all\`) — package page: https://github.com/$REPO/pkgs/container/${REPO#*/}
+
+  | image | contents |
+  | --- | --- |
+  | \`docker pull $IMG:server-cuda12.9-$VERSION\` | cuda-12.9 archive on \`nvidia/cuda:12.9.1-runtime-ubuntu24.04\`; V100 → RTX 5090; moving tags \`:server-cuda12.9\`, \`:latest\` |
+  | \`docker pull $IMG:server-cuda13.4-$VERSION\` | cuda-13.4 archive on \`nvidia/cuda:13.4.1-runtime-ubuntu24.04\`; Ampere and newer; moving tag \`:server-cuda13.4\`; the base image requires a driver reporting CUDA ≥ 13.4 (\`-e NVIDIA_DISABLE_REQUIRE=1\` on 13.x drivers) |
+  | \`docker pull $IMG:bench-cuda12.9-$VERSION\` | the cuda-12.9 server image plus the README benchmark grid runner for rented machines (\`scripts/multigpu/bench/vast/README.md\`); moving tag \`:bench-cuda12.9\` |
+
+  Upstream baseline used for the comparisons: https://github.com/$REPO/releases/tag/baseline-$UP7
+  (unmodified upstream \`$UP7\`, same cuda-12.9 recipe, tarball only).
+EOT
+cat <<'EOT'
 
 Validation: **Tier A** = the offline packaging gate passed in CI (archive unpacks, binaries run, the declared SASS/PTX
 targets are really embedded, the downstream flags are wired, metadata matches the commit). **Tier B** = served a model on
