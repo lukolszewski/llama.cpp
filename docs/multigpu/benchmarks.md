@@ -64,20 +64,32 @@ Regenerate this record with `scripts/multigpu/env-snapshot.sh`, which writes the
 `benches/multi-gpu/machine-01-7950x-6x3090/`. Fields marked **TBD** require either root (PCIe
 capability registers) or a run of the benchmark itself.
 
-### machine-02, machine-03 (reserved, not yet used)
+### machine-02 and later (rented, Vast.ai)
 
-Rented multi-GPU comparisons are planned, likely multi-RTX-4090 and/or multi-RTX-5090. Each gets its
-own directory and its own field table in the same format as machine-01. Until a machine exists and has
-run the suite, it has no rows anywhere — no placeholder numbers.
+Rented multi-GPU machines are measured with the tooling in
+[`scripts/multigpu/bench/vast/`](../../scripts/multigpu/bench/vast/README.md): the same grid script, the
+same server flags and the release's own `cuda-12.9` image, on 6 × RTX 4090, 6–8 × RTX 5090, RTX 6000 /
+PRO 6000 and 8 × Tesla V100 class boxes as they become available. Each machine gets its own
+`benches/multi-gpu/machine-NN-<n>x<gpu>/` with a generated `hardware.md` and one run directory per
+measurement; a section is appended below and a row to README §1 by `vast-bench.sh land`, from the raw JSON,
+through a pull request. Until a run exists a machine has no rows anywhere.
 
-| machine | GPUs | status |
-| --- | --- | --- |
-| machine-02 | TBD (candidate: multiple RTX 4090) | not provisioned; all results TBD |
-| machine-03 | TBD (candidate: multiple RTX 5090 / `sm_120`) | not provisioned; all results TBD |
+Differences from machine-01 that are inherent to a rented container and are stated in every record:
 
-A note for future machines: `sm_120` hardware also lets us runtime-validate the `120a` build, which
-machine-01 cannot do for its `sm_89`/`sm_120a` artifacts (its 5060 Ti is `sm_120` but is the display
-GPU and outside the inference pool).
+- the hardware record is what `nvidia-smi` reports from inside the container (driver, VRAM, PCIe
+  link gen/width as negotiated at collection time, topology matrix); motherboard, RAM modules and PCIe
+  capability registers are `TBD` unless `lspci` can see the bus;
+- the host driver is whatever the provider runs (R570–R610 in October 2026); PTX-only GPUs (Turing)
+  are only accepted on drivers that know CUDA 12.9 PTX;
+- the upstream side is the fork's own build of its upstream base commit with the same recipe
+  (`baseline-<sha7>` prerelease, see [builds.md](builds.md)), because upstream publishes no Linux CUDA
+  tarball or `server-cuda-b<N>` image for these builds; when credit does not allow the 3–4 h upstream
+  grid, the run says "upstream: not measured on this machine" and the README row carries no ratio;
+- the tensor split is VRAM-proportional with the main GPU reduced by the same ~3.6 GB machine-01 uses
+  (`--tensor-split` printed in `bench.log` and stored in `config.json`), the context stays 5 × 262144
+  regardless of how much VRAM the box has, so the numbers are comparable to machine-01's;
+- `sm_120` (RTX 5090) and `sm_89` (RTX 4090) boxes runtime-validate the `120a`/`89` code of the release
+  that machine-01 cannot (its 5060 Ti is the display GPU and outside the inference pool).
 
 ---
 
@@ -180,9 +192,10 @@ Units: tokens/s (aggregate for the 5-slot rows; per-slot values recorded alongsi
 reported as a ratio **and** absolute delta, since a 2x on a bad baseline and a 1.2x on a good one mean
 different things to different users.
 
-### machine-02 / machine-03
+### rented machines
 
-Same table shape, all `TBD`, no rows until the machines exist.
+Sections are appended here by `scripts/multigpu/bench/vast/vast-bench.sh land` (one per machine, same
+table shape, generated from the run's JSON). None yet.
 
 ---
 

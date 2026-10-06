@@ -8,7 +8,7 @@
 #   vast-bench.sh run     --gpu RTX_4090 --num-gpus 6 --max-usd 6 ...    # the whole pipeline
 #   vast-bench.sh status  [--instance ID]                                # what is running, what it costs
 #   vast-bench.sh fetch   --instance ID [--dest DIR]                     # copy /results from a live instance
-#   vast-bench.sh land    --results DIR [--machine-name NAME] [--no-pr]  # results dir -> branch + PR
+#   vast-bench.sh land    --results DIR [--machine-name NAME] [--no-pr] [--base multigpu]  # results dir -> branch + PR
 #   vast-bench.sh destroy --instance ID | --cleanup                      # destroy one / every mgbench-* instance
 #
 # Rules this script enforces (docs/multigpu/benchmarks.md, plan-vast-bench): no GitHub credential ever
@@ -33,8 +33,8 @@ UPSTREAM=0; UPSTREAM_SIZES=""; UPSTREAM_SLOTS=""
 SIZES="5000,50000,150000,200000,250000"; SLOTS="1,5"
 MACHINE_NAME=""; DISK="180"; HF_TOKEN_ENV=""; EXTRA_ENV=""; EXTRA_QUERY=""
 MIN_INET="800"; MIN_CPU_RAM="48"; MIN_DISK="160"; MIN_VRAM_GB="140"; MIN_RELIABILITY="0.95"
-BOOT_TIMEOUT="900"; SSH_TIMEOUT="600"; POLL="60"
-DRY_RUN=0; KEEP=0; NO_LAND=0; NO_PR=0; INSTANCE=""; RESULTS=""; DEST=""; CLEANUP=0; ALLOW_DIRTY=0
+BOOT_TIMEOUT="1800"; SSH_TIMEOUT="600"; POLL="60"
+DRY_RUN=0; KEEP=0; NO_LAND=0; NO_PR=0; INSTANCE=""; RESULTS=""; DEST=""; CLEANUP=0; ALLOW_DIRTY=0; BASE_BRANCH="multigpu"
 SSH_KEY="${MGBENCH_SSH_KEY:-$HOME/.ssh/vastai_ed25519}"
 LABEL_PREFIX="mgbench"
 
@@ -61,7 +61,7 @@ while [ $# -gt 0 ]; do
     --instance) INSTANCE="$2"; shift 2 ;;    --results) RESULTS="$2"; shift 2 ;;
     --dest) DEST="$2"; shift 2 ;;            --cleanup) CLEANUP=1; shift ;;
     --fork-dir) FORK_DIR="$2"; shift 2 ;;    --ssh-key) SSH_KEY="$2"; shift 2 ;;
-    --allow-dirty) ALLOW_DIRTY=1; shift ;;
+    --allow-dirty) ALLOW_DIRTY=1; shift ;;   --base) BASE_BRANCH="$2"; shift 2 ;;
     -h|--help) usage ;;
     *) echo "unknown argument: $1" >&2; usage 2 ;;
   esac
@@ -128,7 +128,7 @@ budget_check() {
 state_file() { echo "$STATE_DIR/instance-$1.json"; }
 save_state() { jq -n --arg id "$INSTANCE" --arg label "$LABEL" --arg offer "$O_ID" --arg dph "$O_DPH" --arg machine "$O_MACHINE" \
   --arg gpu "$O_GPU" --arg n "$O_N" --arg name "$MACHINE_NAME" --arg t0 "$(date -u +%FT%TZ)" --arg image "$IMAGE" \
-  '{instance:$id,label:$label,offer:$offer,dph:$dph,machine_id:$machine,gpu:$gpu,num_gpus:$n,machine_name:$name,created:$t0,image:$image}' > "$(state_file "$INSTANCE")"; }
+  '{"instance":$id,"label":$label,"offer":$offer,"dph":$dph,"machine_id":$machine,"gpu":$gpu,"num_gpus":$n,"machine_name":$name,"created":$t0,"image":$image}' > "$(state_file "$INSTANCE")"; }
 
 ssh_target() {   # prints "port host" for the instance
   local url; url="$(vastai ssh-url "$1" 2>/dev/null | tr -d '\r' | tail -1)"
@@ -141,7 +141,7 @@ rssh() { local id="$1"; shift; local t; t="$(ssh_target "$id")" || return 255; s
 destroy_instance() {
   local id="$1"
   [ -n "$id" ] || return 0
-  local out; out="$(vastai destroy instance "$id" 2>&1)"; log "destroy $id: $(echo "$out" | tail -1)"
+  local out; out="$(vastai destroy instance "$id" -y 2>&1)"; log "destroy $id: $(echo "$out" | tail -1)"
   for _ in 1 2 3 4 5 6; do
     sleep 5
     vast_json show instances | jq -e --argjson id "$id" '.[] | select(.id == $id)' >/dev/null 2>&1 || { log "instance $id is gone"; rm -f "$(state_file "$id")"; return 0; }
@@ -185,8 +185,8 @@ land_results() {   # land_results RESULTS_DIR MACHINE_NAME
   local run; run="$(run_dir_name "$src")"
   local day="${run%%-grid-*}" branch="bench/$name-${run%%-grid-*}"
   local mdir="benches/multi-gpu/$name" rdir="benches/multi-gpu/$name/$run"
-  git fetch -q origin multigpu
-  git checkout -q -b "$branch" origin/multigpu || die "cannot create branch $branch (exists?)"
+  git fetch -q origin "$BASE_BRANCH"
+  git checkout -q -b "$branch" "origin/$BASE_BRANCH" || die "cannot create branch $branch (exists?)"
   mkdir -p "$rdir"
   cp -a "$src"/. "$rdir"/
   rm -f "$rdir/onstart.log"
@@ -219,7 +219,7 @@ sec = f"""### {name} (rented, Vast.ai)
 multigpu commit:  {bi['multigpu_commit']}  (image {bi.get('backend')}, CUDA {bi.get('cuda_toolkit_version')}; SASS {bi.get('cuda_sass')}; PTX {bi.get('cuda_ptx')})
 {commits.splitlines()[1] if len(commits.splitlines()) > 1 else ''}
 {commits.splitlines()[2] if len(commits.splitlines()) > 2 else ''}
-machine:          {n} x {gname} ({vram} GB aggregate), driver {hw.get('driver_version')} (CUDA {hw.get('driver_cuda_version')}), CPU {hw['cpu']['model']}, RAM {hw.get('ram_total_gib')} GiB; record: benches/multi-gpu/{name}/hardware.md
+machine:          {n} x {gname} ({vram} GB aggregate){'' if not cfg.get('DEVICES') or len(cfg['DEVICES'].split(',')) == n else f", GPUs used: {cfg['DEVICES']} ({len(cfg['DEVICES'].split(','))} of {n})"}, driver {hw.get('driver_version')} (CUDA {hw.get('driver_cuda_version')}), CPU {hw['cpu']['model']}, RAM {hw.get('ram_total_gib')} GiB; record: benches/multi-gpu/{name}/hardware.md
 server:           -c {cfg['CTX']} --parallel {cfg['PARALLEL']} -fa {cfg['FA']} --cache-type-k/v {cfg['KV_TYPE']} -b {cfg['BATCH']} -ub {cfg['UBATCH']} --tensor-split {cfg['TENSOR_SPLIT'] or '<none>'} (patched adds --prefill-max-partial {cfg['PREFILL_MAX_PARTIAL']} and LLAMA_DECODE_PIPELINE={cfg['DECODE_PIPELINE']} LLAMA_SERVER_GROUPS={cfg['SERVER_GROUPS']} LLAMA_PIPELINE_PARALLEL={cfg['PIPELINE_PARALLEL']} GGML_CUDA_GRAPHS_FORCE={cfg['GRAPHS_FORCE']} LLAMA_ATTN_ROT_DISABLE={cfg['ATTN_ROT_DISABLE']}; speculation off)
 grid:             slots {cfg['GRID_SLOTS']}, sizes {cfg['GRID_SIZES']}{'' if not U else f"; upstream slots {cfg['UPSTREAM_GRID_SLOTS']}, sizes {cfg['UPSTREAM_GRID_SIZES']}"}; same protocol and scripts as machine-01
 measured:         {day}; {upline}
@@ -247,7 +247,9 @@ if b in s and e in s:
         if ru is not None: v = f"{fmt(ru[key])} → {v} ({rm[key]/ru[key]:.1f}×)"
         return v
     upp1 = pick(U, 1, "pp_slot_mean") if U else None; utgN = pick(U, tgN["slots"], "tg_slot_mean") if (U and tgN) else None
-    row = (f"| [{name}](benches/multi-gpu/{name}/hardware.md) | {n} × {gname} ({vram} GB) | "
+    used = len(cfg['DEVICES'].split(',')) if cfg.get('DEVICES') else n
+    gcell = f"{used} of {n} × {gname} ({vram} GB in the box)" if used != n else f"{n} × {gname} ({vram} GB)"
+    row = (f"| [{name}](benches/multi-gpu/{name}/hardware.md) | {gcell} | "
            f"{cell(pp1, 'pp_slot_mean', upp1, lambda v: f'{v:.0f}')} at {pp1['size_tokens']//1000}k | "
            f"{cell(tgN, 'tg_slot_mean', utgN, lambda v: f'{v:.1f}')} per session, {tgN['slots']} sessions at {tgN['size_tokens']//1000}k | "
            f"{'yes' if U else 'no'} | [{run}]({rdir}/) |")
@@ -271,7 +273,7 @@ Machine record: $mdir/hardware.md. Protocol: docs/multigpu/benchmarks.md." || di
   if [ "$NO_PR" = 1 ]; then log "--no-pr: branch $branch is local; push and open the PR yourself"; return 0; fi
   git push -q -u origin "$branch" || die "push failed"
   local body; body="$(printf '%s\n\n%s\n\n%s\n' "Benchmark grid from a rented machine (\`vast-bench.sh\`), $gpus. Review the hardware record, the server command line in \`config.json\`/\`bench.log\` and the raw JSON before merging; nothing in the tables was typed by hand." "$(cat "$rdir/COMMITS.txt")" "$(cat "$rdir/grid-table.md")")"
-  gh pr create --base multigpu --head "$branch" --title "bench: $name ($gpus) grid $day" --body "$body" || die "gh pr create failed (branch is pushed)"
+  gh pr create --base "$BASE_BRANCH" --head "$branch" --title "bench: $name ($gpus) grid $day" --body "$body" || die "gh pr create failed (branch is pushed)"
 }
 
 # =============================================================================

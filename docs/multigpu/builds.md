@@ -9,6 +9,7 @@ produced it.
 | trigger | workflow | what comes out |
 | --- | --- | --- |
 | push to `multigpu` | `multigpu-build.yml` | one CUDA 12.9 build for `sm_86` only (RTX 3090, the benchmark/production hardware), upstream test suite (`ctest -L main`), Tier A gate, runtime image `ghcr.io/lukolszewski/llama.cpp-multigpu:server-cuda12.9-sm86` (+ `-<sha7>`); the tarball is kept 14 days as a CI artifact, never released |
+| tag `baseline-<sha7>` or dispatch | `multigpu-baseline.yml` | an **unmodified upstream** llama.cpp commit built with the cuda-12.9 release recipe, gated with `validate-artifact.sh --upstream-build`, attached to the prerelease `baseline-<sha7>`; the comparison binary for every benchmark (upstream publishes no Linux CUDA tarball/image for these builds) |
 | tag `multigpu-YYYYMMDD` | `multigpu-release.yml` | the two release flavours below as `.tar.gz` + `cudart` + `patches` + `SHA256SUMS.txt`, the GitHub Release (notes = `docs/multigpu/RELEASE-INTRO.md` + generated provenance and asset table), and both runtime images on ghcr |
 | manual dispatch | both | same as above for an arbitrary ref / existing tag |
 
@@ -116,6 +117,8 @@ CI runs `llama-server --version` inside the image and checks that `ldd` resolves
 | `server-cuda12.9`, `server-cuda13.4`, `latest` (= cuda12.9) | latest release | yes |
 | `server-cuda12.9-sm86-<sha7>` | push build | no |
 | `server-cuda12.9-sm86` | latest push to `multigpu` | yes |
+| `bench-cuda12.9-<YYYYMMDD>` | release: `server-cuda12.9-<YYYYMMDD>` + `.devops/multigpu-bench.Dockerfile` (grid runner for rented machines) | no |
+| `bench-cuda12.9`, `bench-cuda12.9-<sha7>`, `bench-cuda12.9-dev` | `multigpu-bench-image.yml` on pushes touching the bench Dockerfile/scripts (`multigpu` → moving `bench-cuda12.9`; other branches → `-dev`) | yes / no / yes |
 
 The package was created by the first push with the workflow's `GITHUB_TOKEN` and is public (anonymous
 `docker pull` works); check with `docker manifest inspect ghcr.io/lukolszewski/llama.cpp-multigpu:server-cuda12.9-sm86`
