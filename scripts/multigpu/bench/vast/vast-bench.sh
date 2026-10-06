@@ -189,7 +189,7 @@ land_results() {   # land_results RESULTS_DIR MACHINE_NAME
   git checkout -q -b "$branch" "origin/$BASE_BRANCH" || die "cannot create branch $branch (exists?)"
   mkdir -p "$rdir"
   cp -a "$src"/. "$rdir"/
-  rm -f "$rdir/onstart.log"
+  rm -f "$rdir/onstart.log" "$rdir/.booted" "$rdir/.onstart"
   [ -f "$rdir/hardware.md" ] && cp "$rdir/hardware.md" "$mdir/hardware.md"
   # tables are generated from the JSON, never typed
   local up="-"; [ -f "$rdir/grid-upstream.json" ] && up="$rdir/grid-upstream.json"
