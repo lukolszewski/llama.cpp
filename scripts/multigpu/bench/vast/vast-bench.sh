@@ -126,9 +126,9 @@ budget_check() {
 
 # ---- instance ----------------------------------------------------------------
 state_file() { echo "$STATE_DIR/instance-$1.json"; }
-save_state() { jq -n --arg id "$INSTANCE" --arg label "$LABEL" --arg offer "$O_ID" --arg dph "$O_DPH" --arg machine "$O_MACHINE" \
+save_state() { jq -n --arg id "$INSTANCE" --arg lbl "$LABEL" --arg offer "$O_ID" --arg dph "$O_DPH" --arg machine "$O_MACHINE" \
   --arg gpu "$O_GPU" --arg n "$O_N" --arg name "$MACHINE_NAME" --arg t0 "$(date -u +%FT%TZ)" --arg image "$IMAGE" \
-  '{"instance":$id,"label":$label,"offer":$offer,"dph":$dph,"machine_id":$machine,"gpu":$gpu,"num_gpus":$n,"machine_name":$name,"created":$t0,"image":$image}' > "$(state_file "$INSTANCE")"; }
+  '{"instance":$id,"label":$lbl,"offer":$offer,"dph":$dph,"machine_id":$machine,"gpu":$gpu,"num_gpus":$n,"machine_name":$name,"created":$t0,"image":$image}' > "$(state_file "$INSTANCE")"; }
 
 ssh_target() {   # prints "port host" for the instance
   local url; url="$(vastai ssh-url "$1" 2>/dev/null | tr -d '\r' | tail -1)"
