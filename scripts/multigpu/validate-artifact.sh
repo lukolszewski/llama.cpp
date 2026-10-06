@@ -35,6 +35,8 @@ ARCHIVE=""
 EXPECT_ARCH=""
 EXPECT_PTX=""
 EXPECT_NO_PTX=""
+# note: --cache-idle-slots is also an upstream flag (present at df03399b8); with --upstream-build pass an
+# --expect-flags list of fork-only flags (multigpu-baseline.yml does).
 EXPECT_FLAGS="--prefill-max-partial,--prefill-long-threshold,--prefill-max-long,--seq-compact,--cache-idle-slots"
 EXPECT_COMMIT=""
 UPSTREAM_BUILD=""
