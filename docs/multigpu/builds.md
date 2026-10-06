@@ -120,6 +120,15 @@ CI runs `llama-server --version` inside the image and checks that `ldd` resolves
 | `bench-cuda12.9-<YYYYMMDD>` | release: `server-cuda12.9-<YYYYMMDD>` + `.devops/multigpu-bench.Dockerfile` (grid runner for rented machines) | no |
 | `bench-cuda12.9`, `bench-cuda12.9-<sha7>`, `bench-cuda12.9-dev` | `multigpu-bench-image.yml` on pushes touching the bench Dockerfile/scripts (`multigpu` → moving `bench-cuda12.9`; other branches → `-dev`) | yes / no / yes |
 
+**Forward-compatibility library removed (2026-10-06).** NVIDIA's runtime base images ship `cuda-compat-<ver>`, a
+newer `libcuda` meant for datacenter GPUs on old drivers. On a host whose driver is older than that library the
+container toolkit mounts it, GeForce GPUs reject it (`ggml_cuda_init: failed to initialize CUDA: forward
+compatibility was attempted on non supported HW`) and llama.cpp silently falls back to the CPU; observed on an
+8 × RTX 4090 host with driver 570 using the `multigpu-20261006` image via the bench image. Both Dockerfiles now
+purge the package, so the host driver's `libcuda` is used (the R525+ minor-version-compatibility path). The
+`multigpu-20261006` images still contain it: on a GeForce host with a driver older than 575 either rebuild or
+run with `-v /dev/null:/usr/local/cuda/compat/libcuda.so.1` (hides the compat library). Fixed from the next release.
+
 The package was created by the first push with the workflow's `GITHUB_TOKEN` and is public (anonymous
 `docker pull` works); check with `docker manifest inspect ghcr.io/lukolszewski/llama.cpp-multigpu:server-cuda12.9-sm86`
 after a sync in case GitHub ever resets it.

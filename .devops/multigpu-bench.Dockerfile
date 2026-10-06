@@ -28,6 +28,7 @@ LABEL org.opencontainers.image.created=$BUILD_DATE \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends aria2 python3 pciutils jq openssh-server procps \
     && apt-get clean -y && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
+    && (apt-get purge -y 'cuda-compat-12-*' || true) && rm -rf /usr/local/cuda/compat \
     && mkdir -p /run/sshd /root/.ssh && chmod 700 /root/.ssh \
     && sed -i -e 's/^#\?StrictModes.*/StrictModes no/' -e 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' \
               -e 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
@@ -43,6 +44,9 @@ RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/download-model.sh /usr/
              /usr/local/bin/plot-grid.py \
     && mkdir -p /models /results
 
+# cuda-compat-12-* (forward-compatibility libcuda 575.x) is purged above: on hosts whose driver is older than
+# that library the container toolkit mounts it and GeForce GPUs reject it, so llama.cpp silently ran on the CPU
+# (8x RTX 4090, driver 570, 2026-10-06). Without it the host driver's libcuda is used (R525+).
 # NVIDIA's runtime base declares NVIDIA_REQUIRE_CUDA=cuda>=12.9 and the container runtime refuses older
 # drivers; cudart 12.9 runs on any R525+ driver for the SASS targets (minor-version compatibility), so the
 # check is disabled here. PTX-only GPUs still need a CUDA>=12.9 driver; the entrypoint's pre-flight says so.

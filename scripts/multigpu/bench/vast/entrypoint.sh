@@ -103,6 +103,14 @@ preflight() {
   printf '%s\n' "$GPU_CSV" | sed 's/^/    /' | tee -a "$LOG"
   [ "${#SEL[@]}" -ge "$MIN_GPUS" ] || fail "need at least $MIN_GPUS GPUs, have ${#SEL[@]} (MIN_GPUS to override)"
   [ "$((TOTAL_MIB/1024))" -ge "$MIN_VRAM_GB" ] || fail "need >= $MIN_VRAM_GB GB of VRAM for this model, have $((TOTAL_MIB/1024)) GB (MIN_VRAM_GB to override)"
+  # Ask the binary, not the version numbers: CUDA must initialise in THIS container on THIS driver
+  # (2026-10-06: a forward-compat libcuda in the base image made ggml fall back to the CPU on a 570 driver).
+  local devs; devs="$(/app/llama-server --list-devices 2>&1 | grep -cE '^\s*CUDA[0-9]+:' || true)"
+  if [ "${devs:-0}" -lt "${#SEL[@]}" ]; then
+    /app/llama-server --list-devices 2>&1 | tail -n 15 | tee -a "$LOG"
+    fail "llama-server sees $devs CUDA device(s), need ${#SEL[@]}: the CUDA backend does not initialise on this host (driver/libcuda), refusing to continue"
+  fi
+  log "llama-server --list-devices: $devs CUDA device(s)"
   # Which GPUs have native code in this build? BUILD_INFO lists SASS and PTX targets; a PTX-only GPU needs a driver
   # that understands the toolkit's PTX (CUDA 12.9 -> R575+).
   local sass ptx toolkit
@@ -235,6 +243,9 @@ run_side() {   # run_side multigpu|upstream BIN_DIR SLOTS SIZES
   done
   log ">> [$kind] healthy after ${el}s; grid slots=$slots sizes=$sizes"
   nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv,noheader 2>/dev/null | tr '\n' ';' | sed "s/^/   [$kind] VRAM after load: /" | tee -a "$LOG"; echo
+  local used_mib=0 m
+  for m in $(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits 2>/dev/null | awk -F', ' -v d=",$DEVICES," 'index(d, ","$1",") {print $2}'); do used_mib=$((used_mib + m)); done
+  if [ "$used_mib" -lt "${MIN_LOADED_MIB:-10240}" ]; then stop_server; fail "[$kind] only ${used_mib} MiB of VRAM in use after load on GPUs [$DEVICES]: the model is not on the GPUs (CPU fallback?), see $slog"; fi
   local tcmd=(); [ "$GRID_TIMEOUT" -gt 0 ] && tcmd=(timeout "$GRID_TIMEOUT")
   "${tcmd[@]}" python3 /usr/local/bin/readme_grid.py "http://127.0.0.1:$PORT" "$kind" "$out" "$slots" "$sizes" 2>&1 | tee -a "$LOG"
   local rc=${PIPESTATUS[0]}

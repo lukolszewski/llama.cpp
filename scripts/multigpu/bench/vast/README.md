@@ -103,8 +103,14 @@ Exit codes: 2 no offer or over budget, 3 instance never ran, 4 remote `FAILED`, 
 
 ## Driver and architecture caveats
 
-- The image is NVIDIA's `cuda:12.9.1-runtime` base with `NVIDIA_DISABLE_REQUIRE=1`: it starts on any R525+
-  driver (CUDA minor-version compatibility covers the SASS targets sm_70/86/89/120a/121a).
+- The image is NVIDIA's `cuda:12.9.1-runtime` base with `NVIDIA_DISABLE_REQUIRE=1` and **without** the
+  `cuda-compat-12-9` package: with it, hosts whose driver is older than the compat `libcuda` (575) made ggml
+  fall back to the CPU on GeForce ("forward compatibility was attempted on non supported HW"; 8 × 4090, driver
+  570, 2026-10-06, ~$3 of CPU benchmarking). Without it the host driver's `libcuda` is used and any R525+ driver
+  works for the SASS targets. The pre-flight now runs `llama-server --list-devices` and refuses to download the
+  model when fewer CUDA devices than selected GPUs show up; after load it requires ≥ 10 GiB of VRAM in use
+  (`MIN_LOADED_MIB`); the orchestrator aborts on a first grid row below `--min-pp 300` / `--min-tg 5` t/s and
+  then **keeps the instance for repair in place** (`--no-repair` to destroy instead).
 - GPUs that only have **PTX** in the build (Turing `sm_75`: RTX 2080 Ti, T4) need a driver that knows CUDA
   12.9 PTX (R575+). The entrypoint checks the driver's CUDA version against `BUILD_INFO.json` and aborts
   with a clear message; `vast-bench.sh` adds `cuda_vers>=12.9` to the search for Turing names.

@@ -9,6 +9,12 @@
 #   docker build -f .devops/multigpu-cuda.Dockerfile --build-arg CUDA_VERSION=12.9.1 -t llama.cpp-multigpu:server ctx/
 #   (ctx/ contains bin/ = the unpacked archive directory)
 #
+# The NVIDIA runtime base ships cuda-compat-<ver> (a forward-compatibility libcuda). On a host whose driver is
+# older than that library the container toolkit mounts it, and GeForce GPUs reject it ("forward compatibility
+# was attempted on non supported HW") so llama.cpp silently falls back to the CPU (seen 2026-10-06 on an
+# 8x RTX 4090 host with driver 570). Purged below: the host driver's libcuda is used instead, which is the
+# documented R525+ minor-version-compatibility path.
+#
 # CUDA_VERSION must be the toolkit the archive was built with (12.9.1 or 13.4.1): a cuBLAS/cudart major
 # version mismatch between the archive and the base image fails at load time.
 
@@ -33,6 +39,7 @@ LABEL org.opencontainers.image.created=$BUILD_DATE \
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libgomp1 libssl3t64 curl ca-certificates \
+    && (apt-get purge -y 'cuda-compat-12-*' 'cuda-compat-13-*' || true) && rm -rf /usr/local/cuda/compat \
     && apt-get clean -y \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 

@@ -35,6 +35,7 @@ MACHINE_NAME=""; DISK="180"; HF_TOKEN_ENV=""; EXTRA_ENV=""; EXTRA_QUERY=""
 MIN_INET="800"; MIN_CPU_RAM="48"; MIN_DISK="160"; MIN_VRAM_GB="140"; MIN_RELIABILITY="0.95"; INGRESS_GB="115"
 BOOT_TIMEOUT="1800"; SSH_TIMEOUT="600"; POLL="60"
 DRY_RUN=0; KEEP=0; NO_LAND=0; NO_PR=0; INSTANCE=""; RESULTS=""; DEST=""; CLEANUP=0; ALLOW_DIRTY=0; BASE_BRANCH="multigpu"
+MIN_PP="300"; MIN_TG="5"; KEEP_ON_FAIL=1
 SSH_KEY="${MGBENCH_SSH_KEY:-$HOME/.ssh/vastai_ed25519}"
 LABEL_PREFIX="mgbench"
 
@@ -62,6 +63,8 @@ while [ $# -gt 0 ]; do
     --dest) DEST="$2"; shift 2 ;;            --cleanup) CLEANUP=1; shift ;;
     --fork-dir) FORK_DIR="$2"; shift 2 ;;    --ssh-key) SSH_KEY="$2"; shift 2 ;;
     --allow-dirty) ALLOW_DIRTY=1; shift ;;   --base) BASE_BRANCH="$2"; shift 2 ;;
+    --min-pp) MIN_PP="$2"; shift 2 ;;        --min-tg) MIN_TG="$2"; shift 2 ;;
+    --no-repair) KEEP_ON_FAIL=0; shift ;;
     -h|--help) usage ;;
     *) echo "unknown argument: $1" >&2; usage 2 ;;
   esac
@@ -337,7 +340,9 @@ cleanup() {
   local rc=$?
   trap - EXIT INT TERM
   if [ -n "$INSTANCE" ]; then
-    if [ "$KEEP" = 1 ]; then log "--keep: instance $INSTANCE left running (\$$O_DPH/h!). Destroy with: $0 destroy --instance $INSTANCE"
+    if [ "$KEEP" = 1 ] || { [ "$KEEP_ON_FAIL" = 1 ] && [ "${EXIT_CODE:-$rc}" = 4 ]; }; then
+      log "instance $INSTANCE LEFT RUNNING for repair in place (\$$O_DPH/h!): $(ssh_target "$INSTANCE" | awk '{print "ssh -i '"$SSH_KEY"' -o IdentitiesOnly=yes -p "$1" root@"$2}')"
+      log "   repair, then restart with the printed 'onstart:' env line + SKIP_DOWNLOAD=1; fetch/land with: $0 fetch --instance $INSTANCE; $0 land --results ...; destroy with: $0 destroy --instance $INSTANCE (--no-repair disables this)"
     else destroy_instance "$INSTANCE"; fi
     billed_summary "$INSTANCE" "$T0" "$O_DPH"
   fi
@@ -392,6 +397,15 @@ while :; do
     logpart="${out%%@@MARK@@*}"; marks="${out#*@@MARK@@}"
     if [ -n "$logpart" ]; then printf '%s\n' "$logpart" | grep -v '^\s*$' | sed 's/^/   | /'; SEEN=$(( SEEN + $(printf '%s\n' "$logpart" | grep -c '') )); fi
     if grep -q '^FAILED:' <<<"$marks"; then log "remote reported FAILED: $(grep '^FAILED:' <<<"$marks" | head -1)"; EXIT_CODE=4; break; fi
+    # sanity on the first grid rows: CPU-speed numbers are not results, stop paying for them
+    row="$(printf '%s\n' "$logpart" | grep -E ' slots=[0-9]+ size=[0-9]+ pn=' | head -1 || true)"
+    if [ -n "$row" ]; then
+      pp="$(sed -nE 's/.*pp_agg=([0-9.]+).*/\1/p' <<<"$row")"; tg="$(sed -nE 's/.*tg_agg=([0-9.]+).*/\1/p' <<<"$row")"
+      if py "import sys; sys.exit(0 if float('${pp:-0}') < float('$MIN_PP') or float('${tg:-0}') < float('$MIN_TG') else 1)"; then
+        log "ABORT: first grid row is below the sanity floor (pp_agg=${pp:-?} < $MIN_PP or tg_agg=${tg:-?} < $MIN_TG t/s): the GPUs are not doing the work. Check grid-*-server.log."
+        EXIT_CODE=4; break
+      fi
+    fi
     if grep -q ' ok ' <<<"$marks"; then log "remote DONE: $(grep ' ok ' <<<"$marks" | head -1)"; break; fi
     if grep -q NO-ONSTART <<<"$marks" && [ $(( $(date +%s) - t )) -gt 600 ]; then log "onstart never ran; starting the bench over ssh"; rssh "$INSTANCE" "$ONSTART" >/dev/null 2>&1 || true; fi
   else
