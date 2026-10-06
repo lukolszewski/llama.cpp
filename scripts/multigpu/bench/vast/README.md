@@ -75,6 +75,7 @@ scripts/multigpu/bench/vast/vast-bench.sh run --gpu RTX_3090 --num-gpus 1 --min-
 | `--gpu NAME --num-gpus N` | required | Vast spelling: `RTX_4090`, `RTX_5090`, `Tesla_V100`, `RTX_2080_Ti`, `RTX_6000Ada`, `RTX_PRO_6000_S` |
 | `--max-usd`, `--max-hours`, `--max-dph` | 10, 5, none | budget cap, wall cap (instance destroyed), price filter |
 | `--offer ID` | cheapest match | pin an offer from `search` |
+| `--machine-id ID` | | only offers on that physical machine (`machine_id` from `hardware.json`/the run log): rerun both sides on the box an earlier run used |
 | `--image` | `…:bench-cuda12.9` | the bench image (use `…:bench-cuda12.9-<version>` to pin) |
 | `--upstream` / `--no-upstream` | off | also run the upstream baseline on the same instance after the patched grid |
 | `--sizes`, `--slots` | README grid | token sizes / session counts; `--upstream-sizes`, `--upstream-slots` for the baseline side |

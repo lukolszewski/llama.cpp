@@ -35,7 +35,7 @@ MACHINE_NAME=""; DISK="180"; HF_TOKEN_ENV=""; EXTRA_ENV=""; EXTRA_QUERY=""
 MIN_INET="800"; MIN_CPU_RAM="48"; MIN_DISK="160"; MIN_VRAM_GB="140"; MIN_RELIABILITY="0.95"; INGRESS_GB="115"
 BOOT_TIMEOUT="1800"; SSH_TIMEOUT="600"; POLL="60"
 DRY_RUN=0; KEEP=0; NO_LAND=0; NO_PR=0; INSTANCE=""; RESULTS=""; DEST=""; CLEANUP=0; ALLOW_DIRTY=0; BASE_BRANCH="multigpu"
-MIN_PP="300"; MIN_TG="5"; KEEP_ON_FAIL=1
+MIN_PP="300"; MIN_TG="5"; KEEP_ON_FAIL=1; MACHINE_ID=""
 SSH_KEY="${MGBENCH_SSH_KEY:-$HOME/.ssh/vastai_ed25519}"
 LABEL_PREFIX="mgbench"
 
@@ -64,7 +64,7 @@ while [ $# -gt 0 ]; do
     --fork-dir) FORK_DIR="$2"; shift 2 ;;    --ssh-key) SSH_KEY="$2"; shift 2 ;;
     --allow-dirty) ALLOW_DIRTY=1; shift ;;   --base) BASE_BRANCH="$2"; shift 2 ;;
     --min-pp) MIN_PP="$2"; shift 2 ;;        --min-tg) MIN_TG="$2"; shift 2 ;;
-    --no-repair) KEEP_ON_FAIL=0; shift ;;
+    --no-repair) KEEP_ON_FAIL=0; shift ;;    --machine-id) MACHINE_ID="$2"; shift 2 ;;
     -h|--help) usage ;;
     *) echo "unknown argument: $1" >&2; usage 2 ;;
   esac
@@ -87,6 +87,7 @@ search_offers() {
   local q="num_gpus=$NUM_GPUS gpu_name=$GPU disk_space>=$MIN_DISK cpu_ram>=$MIN_CPU_RAM inet_down>=$MIN_INET cuda_vers>=$(cuda_floor "$GPU") reliability>=$MIN_RELIABILITY rentable=true verified=true direct_port_count>=2"
   [ -n "$GPU_RAM_MIN" ] && q="$q gpu_ram>=$GPU_RAM_MIN"
   [ -n "$MAX_DPH" ] && q="$q dph<=$MAX_DPH"
+  [ -n "$MACHINE_ID" ] && q="$q machine_id=$MACHINE_ID"   # same physical box as an earlier run (A/B on identical hardware)
   q="$q$EXTRA_QUERY"
   log "vastai search offers '$q' -o dph"
   OFFERS_JSON="$(vast_json search offers "$q" -o dph)" || die "vastai search failed"
