@@ -812,6 +812,9 @@ int main(int argc, char ** argv) {
     common_log_set_verbosity_thold(LOG_LEVEL_DEBUG);
     common_init();
 
+    // with GGML_BACKEND_DL the backends live in separate libraries; nothing loads them for us
+    ggml_backend_load_all();
+
     std::random_device rd;
 
     llm_arch arch = LLM_ARCH_UNKNOWN;
