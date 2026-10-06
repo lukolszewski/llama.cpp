@@ -12,7 +12,10 @@ on:
     branches: [multigpu, 'bench-*']
     paths:
       - '.devops/multigpu-bench.Dockerfile'
-      - 'scripts/multigpu/bench/vast/**'
+      - 'scripts/multigpu/bench/vast/entrypoint.sh'
+      - 'scripts/multigpu/bench/vast/download-model.sh'
+      - 'scripts/multigpu/bench/vast/healthcheck.sh'
+      - 'scripts/multigpu/bench/vast/collect-hardware.py'
       - 'scripts/multigpu/bench/readme_grid.py'
       - 'scripts/multigpu/bench/readme_table.py'
       - 'scripts/multigpu/bench/plot-grid.py'

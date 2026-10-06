@@ -273,7 +273,8 @@ Machine record: $mdir/hardware.md. Protocol: docs/multigpu/benchmarks.md." || di
   if [ "$NO_PR" = 1 ]; then log "--no-pr: branch $branch is local; push and open the PR yourself"; return 0; fi
   git push -q -u origin "$branch" || die "push failed"
   local body; body="$(printf '%s\n\n%s\n\n%s\n' "Benchmark grid from a rented machine (\`vast-bench.sh\`), $gpus. Review the hardware record, the server command line in \`config.json\`/\`bench.log\` and the raw JSON before merging; nothing in the tables was typed by hand." "$(cat "$rdir/COMMITS.txt")" "$(cat "$rdir/grid-table.md")")"
-  gh pr create --base "$BASE_BRANCH" --head "$branch" --title "bench: $name ($gpus) grid $day" --body "$body" || die "gh pr create failed (branch is pushed)"
+  local repo; repo="$(git remote get-url origin | sed -E 's#.*github.com[:/]##; s#\.git$##')"   # explicit: gh would otherwise target the fork's parent
+  gh pr create -R "$repo" --base "$BASE_BRANCH" --head "$branch" --title "bench: $name ($gpus) grid $day" --body "$body" || die "gh pr create failed (branch is pushed)"
 }
 
 # =============================================================================
