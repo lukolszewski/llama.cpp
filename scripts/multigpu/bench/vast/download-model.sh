@@ -50,6 +50,7 @@ MTP_HEAD="${MTP_HEAD:-MTP/mtp-Qwen3.8-Flash-Next-Q8_0.gguf}"
 ARIA_X="${ARIA_X:-16}"                 # connections per file
 FILES_PAR="${FILES_PAR:-1}"            # files at once (aria2c processes)
 ARIA_SUMMARY="${ARIA_SUMMARY:-10}"     # s between aria2's own readout
+ARIA_READOUT="${ARIA_READOUT:-true}"   # false when stdout is a log file (the readout is a \r-animated bar)
 PROGRESS_INTERVAL="${PROGRESS_INTERVAL:-15}"   # s between our aggregate lines
 RETRIES="${RETRIES:-0}"                # 0 = forever
 RETRY_WAIT="${RETRY_WAIT:-15}"
@@ -201,7 +202,7 @@ _via_aria() {
     --max-tries=0 --retry-wait=10 --timeout=60 --connect-timeout=30 \
     --max-file-not-found=3 \
     --auto-save-interval=15 \
-    --show-console-readout=true --summary-interval="$ARIA_SUMMARY" \
+    --show-console-readout="$ARIA_READOUT" --summary-interval="$ARIA_SUMMARY" \
     --console-log-level="$CONSOLE_LOG_LEVEL" \
     "${auth[@]}" "${ck[@]}" "$url"
 }

@@ -146,9 +146,11 @@ PY
 download_model() {
   log ">> model: $HF_REPO ${HF_FILES:-$QUANT} -> $MODEL_DIR"
   local t0; t0=$(date +%s)
+  # straight into the log (no pipeline: a closed pipe would SIGPIPE aria2 mid-download, seen as exit 141)
   MODEL_DIR="$MODEL_DIR" HF_REPO="$HF_REPO" QUANT="$QUANT" HF_FILES="$HF_FILES" USE_MMPROJ=0 MTP=0 \
-    /usr/local/bin/download-model.sh 2>&1 | tee -a "$LOG" | grep -vE '^\[#|^\s*$' | tail -n 0
-  local rc=${PIPESTATUS[0]}
+  ARIA_READOUT="${ARIA_READOUT:-false}" ARIA_SUMMARY="${ARIA_SUMMARY:-60}" PROGRESS_INTERVAL="${PROGRESS_INTERVAL:-30}" \
+    /usr/local/bin/download-model.sh >> "$LOG" 2>&1
+  local rc=$?
   [ "$rc" -eq 0 ] || fail "model download failed (exit $rc, see bench.log)"
   log ">> model: complete in $(( $(date +%s) - t0 )) s"
   echo "$(( $(date +%s) - t0 ))" > "$RESULTS_DIR/download-seconds"
