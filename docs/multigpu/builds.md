@@ -139,7 +139,7 @@ git push origin multigpu-20261005          # -> multigpu-release.yml
 
 Release title: `llama.cpp-multigpu 20261005 — Qwen3.8-Flash-Next multi-GPU performance build`. Body:
 `docs/multigpu/RELEASE-INTRO.md` (what the patches do, the measured numbers, the reference
-configuration, caveats — keep it in sync with README §4) followed by the generated provenance table, the
+configuration, caveats — keep it in sync with README §1) followed by the generated provenance table, the
 asset table with SASS/PTX/driver columns and validation state, and the patch list.
 
 ## Validation tiers

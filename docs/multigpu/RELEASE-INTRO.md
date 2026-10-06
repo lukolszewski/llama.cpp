@@ -1,4 +1,4 @@
-<!-- Prepended by scripts/multigpu/release-notes.sh to every tagged release body. Keep the numbers in sync with README §4. -->
+<!-- Prepended by scripts/multigpu/release-notes.sh to every tagged release body. Keep the numbers in sync with README §1. -->
 ## llama.cpp-multigpu
 
 Upstream llama.cpp plus 47 performance patches for **Qwen3.8-Flash-Next** (`qwen4exp`) on consumer multi-GPU systems with

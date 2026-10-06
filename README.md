@@ -1,89 +1,55 @@
 # llama.cpp-multigpu
 
-**STATUS: TEMPORARY DOWNSTREAM PERFORMANCE FORK**
+[![release](https://img.shields.io/github/v/release/lukolszewski/llama.cpp-multigpu?label=release&color=d35400)](../../releases)
+[![CUDA 12.9 | 13.4](https://img.shields.io/badge/CUDA-12.9%20%7C%2013.4-76b900)](#4-downloads)
+[![ghcr.io image](https://img.shields.io/badge/ghcr.io-llama.cpp--multigpu-2496ed)](https://github.com/lukolszewski/llama.cpp-multigpu/pkgs/container/llama.cpp-multigpu)
+[![benchmarked](https://img.shields.io/badge/benchmarked-2026--10--05%20%C2%B7%206%20%C3%97%20RTX%203090-informational)](#1-performance-summary)
+[![upstream base](https://img.shields.io/badge/upstream%20llama.cpp-df03399b8-lightgrey)](https://github.com/ggml-org/llama.cpp/commit/df03399b885831b2a1603b3abb0d8c156808e363)
+[![license MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-This repository exists only while these workloads perform materially better here than in upstream
-[`llama.cpp`](https://github.com/ggml-org/llama.cpp). The intended end state is that upstream
-implements equivalent or better fixes, at which point this repository has succeeded, becomes
-unnecessary, and gets archived. **Archiving this repo because upstream caught up is the goal.** 
-If your workload is not the one described below, use upstream llama.cpp.
+### Up to 8× faster prefill and up to 10× faster generation than stock llama.cpp — Qwen3.8-Flash-Next on consumer multi-GPU machines
 
-`llama.cpp-multigpu` is an experimental downstream branch of llama.cpp carrying a targeted set of
-performance patches for **Qwen3.8-Flash-Next** on **consumer multi-GPU systems**, particularly
-machines whose GPUs share or are limited by constrained **PCIe** links. It is still llama.cpp: same
-engine, same GGUF models, same `llama-server` API, same options, same upstream code base. It is not a
-new inference runtime, model format, or ecosystem.
+Upstream's speed falls with context length and collapses under concurrency; this build stays flat. Measured
+2026-10-05 on 6 × RTX 3090 (constrained PCIe), same model, same command line, upstream = the commit this
+patchset branches from:
+
+| workload | context | upstream llama.cpp | llama.cpp-multigpu | gain |
+| --- | --- | ---: | ---: | ---: |
+| prefill, 1 session | 50k | 568 t/s | **2127 t/s** | 3.7× |
+| prefill, 1 session | 250k | 263 t/s | **2111 t/s** | **8.0×** |
+| prefill, 5 sessions (aggregate) | 250k | 265 t/s | **2060 t/s** | 7.8× |
+| generation, 1 session | 50k | 25.7 t/s | **41.9 t/s** | 1.6× |
+| generation, 1 session | 250k | 10.2 t/s | **33.7 t/s** | 3.3× |
+| generation, 5 sessions (per session) | 250k | 2.3 t/s | **27.3 t/s** | **10.8×** |
+
+![prefill and generation throughput vs context length, upstream vs llama.cpp-multigpu, 1 and 5 sessions](benches/multi-gpu/machine-01-7950x-6x3090/2026-10-05-grid-df03399b8-vs-134489582/grid.svg)
+
+Full 20-row table and protocol: [§1](#1-performance-summary) · binaries and images: [§4](#4-downloads) · how to run it:
+[§5](#5-usage) · what the 47 patches do: [docs/multigpu/patches.md](docs/multigpu/patches.md) · where it does **not**
+help (other models, NVLink or single-GPU boxes, mixed prefill + decode): [§9](#9-known-limitations).
+
+**STATUS: TEMPORARY DOWNSTREAM PERFORMANCE FORK.** This repository exists only while these workloads perform
+materially better here than in upstream [`llama.cpp`](https://github.com/ggml-org/llama.cpp). The intended
+end state is that upstream implements equivalent or better fixes and this repository is archived — **archiving
+it because upstream caught up is the goal.** If your workload is not the one described here, use upstream.
+
+It is still llama.cpp: same engine, same GGUF models, same `llama-server` API, same options, same upstream code
+base, plus a targeted set of runtime-selected performance patches. It is not a new inference runtime, model
+format, or ecosystem.
 
 | | |
 | --- | --- |
 | Upstream | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) — MIT licensed, remains the general-purpose project |
 | Patched branch | [`multigpu`](../../tree/multigpu) (this page) — upstream + the performance patchset, and the source of all releases |
 | Upstream-tracking branch | [`master`](../../tree/master) — kept as close to upstream as practical, never released from |
-| Prebuilt binaries | [Releases](../../releases) — two Linux x86-64 CUDA builds per release (CUDA 12.9: V100 → RTX 5090; CUDA 13.4: Ampere+) plus `ghcr.io/lukolszewski/llama.cpp-multigpu` images; see [Downloads](#6-downloads) |
-| Benchmarks | Measured 2026-10-05 on machine-01 (6 × RTX 3090): prefill 1.75–8×, decode 1.2–10.8× vs upstream — [Performance summary](#4-performance-summary); protocol and raw data in [docs/multigpu/benchmarks.md](docs/multigpu/benchmarks.md) |
+| Prebuilt binaries | [Releases](../../releases) — two Linux x86-64 CUDA builds per release (CUDA 12.9: V100 → RTX 5090; CUDA 13.4: Ampere+) plus `ghcr.io/lukolszewski/llama.cpp-multigpu` images; see [Downloads](#4-downloads) |
+| Benchmarks | Measured 2026-10-05 on machine-01 (6 × RTX 3090): prefill 1.75–8×, decode 1.2–10.8× vs upstream — [Performance summary](#1-performance-summary); protocol and raw data in [docs/multigpu/benchmarks.md](docs/multigpu/benchmarks.md) |
 
 ---
 
-## 1. What is llama.cpp-multigpu?
+## 1. Performance summary
 
-A fork whose entire purpose is to make a specific class of llama.cpp workloads fast enough to be
-usable *now*, while the corresponding upstream work is still in progress. The organizing loop is:
-
-```
-problem -> benchmark -> patch -> build -> measurable result
-```
-
-not "grow a platform". Each optimization is kept as an individually identifiable commit so it can be
-compared against upstream, generalized, upstreamed, or deleted on its own. See
-[docs/multigpu/patches.md](docs/multigpu/patches.md).
-
-## 2. Current target
-
-| Category | Models | Status |
-| --- | --- | --- |
-| Primary | **Qwen3.8-Flash-Next** (llama.cpp arch `qwen4exp`) | the model the patches were written and measured against; the benchmark configuration is `unsloth/Qwen3.8-Flash-Next-GGUF`, `UD-Q4_K_XL` |
-| Experimental | none yet | would need to be demonstrated before being listed |
-| Might benefit, not demonstrated | Qwen3.8-27B, Qwen3.6-MoE, other architecturally related hybrid/sparse-attention MoE models | no claims made; treat as untested |
-
-Qwen3.6, Qwen3.8 and Qwen3.8-Next are distinct model families. Sharing implementation details is not
-the same as sharing support, so **no generic "Qwen support" is claimed here**. Multi-GPU work on other
-architectures may benefit from the scheduler and graph changes, but that has not been measured.
-
-Multi-token-prediction (MTP) drafts from the same Hugging Face repository are **out of scope**: they
-help little in the single-user case and cost throughput in the multi-slot case, which is the opposite
-of what this fork optimizes for. What *is* in: **n-gram lookup speculation** (prompt lookup decoding —
-no draft model; repeats of the context such as code being rewritten, quotes or lists are proposed and
-verified in one batch, output identical to greedy), made to work with the decode groups and capped by
-default to at most two concurrently generating users, because a draft round costs every user a graph
-re-plan. Measured on machine-01, solo, 1500 greedy tokens: code rewrite 44 → 111 t/s, prose with quotes
-45 → 49, repetitive lists 45 → 75; with three or more users it is off and nothing changes.
-
-The reference configuration (what runs on machine-01 since 2026-10-05): 5 slots × 262144 context,
-`q8_0` KV cache, `-fa on`, `-b 2048 -ub 512`, layer split over six GPUs with the per-layer token embedding
-on the CPU, decode groups = 5, prefill chunked beside decoders, asynchronous prompt-cache save/restore,
-lookup speculation capped at 2 users.
-
-## 3. Why this fork exists
-
-Upstream llama.cpp currently performs poorly for these workloads, and the gap is large enough that it
-matters for daily use. Some findings were reported upstream; only a subset has been merged, and some
-merged implementations do not fully close the gap. Rather than leave working fixes as fragments in
-issue threads, this repository publishes them as a buildable, benchmarkable, downloadable branch.
-
-Concretely, the fork exists to:
-
-1. let affected users benefit from the fixes immediately;
-2. serve people who do not compile llama.cpp via prebuilt binaries;
-3. make the optimizations reproducible and benchmarkable;
-4. give upstream maintainers and other developers an easy place to inspect the patches;
-5. provide concrete evidence that specific performance problems exist;
-6. let CUDA/ggml specialists improve or generalize the fixes on top of a working branch;
-7. avoid forcing every discovery into a perfectly generalized upstream PR before anyone can use it;
-8. keep a public technical record of the performance work.
-
-## 4. Performance summary
-
-Measured 2026-10-05 on `machine-01` (see [§5](#5-hardware-tested)); model Qwen3.8-Flash-Next
+Measured 2026-10-05 on `machine-01` (see [§2](#2-hardware-tested)); model Qwen3.8-Flash-Next
 `UD-Q4_K_XL`; upstream commit `df03399b8` (the revision the patchset branches from, built with the same
 recipe: CUDA 12.4.1, gcc 12, `86-real`); multigpu commit `134489582` (code identical to `e4054f726`, the
 configuration in production on this machine). Both servers ran the same command line — 5 slots × 262144
@@ -128,7 +94,7 @@ exactly where the workload lives — long contexts, several sessions — and sma
 Mixed prefill + generation is deliberately absent from the headline table and is documented separately
 in [docs/multigpu/benchmarks.md#mixed-workload-behavior](docs/multigpu/benchmarks.md#mixed-workload-behavior).
 
-## 5. Hardware tested
+## 2. Hardware tested
 
 `machine-01`, the primary benchmark machine. Full record and per-field provenance:
 [benches/multi-gpu/machine-01-7950x-6x3090/hardware.md](benches/multi-gpu/machine-01-7950x-6x3090/hardware.md).
@@ -158,7 +124,33 @@ with fast GPU interconnects, and results from different machines are never merge
 The structure allows additional machines (e.g. rented multi-4090 or multi-5090 boxes) as `machine-02`,
 `machine-03`, each with its own configuration record.
 
-## 6. Downloads
+## 3. Current target
+
+| Category | Models | Status |
+| --- | --- | --- |
+| Primary | **Qwen3.8-Flash-Next** (llama.cpp arch `qwen4exp`) | the model the patches were written and measured against; the benchmark configuration is `unsloth/Qwen3.8-Flash-Next-GGUF`, `UD-Q4_K_XL` |
+| Experimental | none yet | would need to be demonstrated before being listed |
+| Might benefit, not demonstrated | Qwen3.8-27B, Qwen3.6-MoE, other architecturally related hybrid/sparse-attention MoE models | no claims made; treat as untested |
+
+Qwen3.6, Qwen3.8 and Qwen3.8-Next are distinct model families. Sharing implementation details is not
+the same as sharing support, so **no generic "Qwen support" is claimed here**. Multi-GPU work on other
+architectures may benefit from the scheduler and graph changes, but that has not been measured.
+
+Multi-token-prediction (MTP) drafts from the same Hugging Face repository are **out of scope**: they
+help little in the single-user case and cost throughput in the multi-slot case, which is the opposite
+of what this fork optimizes for. What *is* in: **n-gram lookup speculation** (prompt lookup decoding —
+no draft model; repeats of the context such as code being rewritten, quotes or lists are proposed and
+verified in one batch, output identical to greedy), made to work with the decode groups and capped by
+default to at most two concurrently generating users, because a draft round costs every user a graph
+re-plan. Measured on machine-01, solo, 1500 greedy tokens: code rewrite 44 → 111 t/s, prose with quotes
+45 → 49, repetitive lists 45 → 75; with three or more users it is off and nothing changes.
+
+The reference configuration (what runs on machine-01 since 2026-10-05): 5 slots × 262144 context,
+`q8_0` KV cache, `-fa on`, `-b 2048 -ub 512`, layer split over six GPUs with the per-layer token embedding
+on the CPU, decode groups = 5, prefill chunked beside decoders, asynchronous prompt-cache save/restore,
+lookup speculation capped at 2 users.
+
+## 4. Downloads
 
 Prebuilt binaries are a first-class deliverable: many affected users do not build llama.cpp.
 
@@ -200,7 +192,7 @@ evidence we lack. Details: [docs/multigpu/builds.md](docs/multigpu/builds.md).
 Archives are weights-free. MIT covers the code; model weights remain under their own license, and no
 GGUF is ever attached to a release.
 
-## 7. Usage
+## 5. Usage
 
 Everything is normal llama.cpp usage; the patches are selected by environment variables and a few
 extra server flags, so **one build carries the whole patchset** and no feature-specific binaries
@@ -241,6 +233,37 @@ Multi-GPU placement (`-sm`, `-ot`, `--tensor-parallel-size`, per-device memory) 
 documented in [docs/multi-gpu.md](docs/multi-gpu.md). Context/batch/split settings that materially
 affect these patches must be recorded with every benchmark result.
 
+## 6. What is llama.cpp-multigpu?
+
+A fork whose entire purpose is to make a specific class of llama.cpp workloads fast enough to be
+usable *now*, while the corresponding upstream work is still in progress. The organizing loop is:
+
+```
+problem -> benchmark -> patch -> build -> measurable result
+```
+
+not "grow a platform". Each optimization is kept as an individually identifiable commit so it can be
+compared against upstream, generalized, upstreamed, or deleted on its own. See
+[docs/multigpu/patches.md](docs/multigpu/patches.md).
+
+## 7. Why this fork exists
+
+Upstream llama.cpp currently performs poorly for these workloads, and the gap is large enough that it
+matters for daily use. Some findings were reported upstream; only a subset has been merged, and some
+merged implementations do not fully close the gap. Rather than leave working fixes as fragments in
+issue threads, this repository publishes them as a buildable, benchmarkable, downloadable branch.
+
+Concretely, the fork exists to:
+
+1. let affected users benefit from the fixes immediately;
+2. serve people who do not compile llama.cpp via prebuilt binaries;
+3. make the optimizations reproducible and benchmarkable;
+4. give upstream maintainers and other developers an easy place to inspect the patches;
+5. provide concrete evidence that specific performance problems exist;
+6. let CUDA/ggml specialists improve or generalize the fixes on top of a working branch;
+7. avoid forcing every discovery into a perfectly generalized upstream PR before anyone can use it;
+8. keep a public technical record of the performance work.
+
 ## 8. Benchmark methodology
 
 Summarized here; specified in [docs/multigpu/benchmarks.md](docs/multigpu/benchmarks.md).
@@ -255,8 +278,9 @@ Summarized here; specified in [docs/multigpu/benchmarks.md](docs/multigpu/benchm
 - Every run records upstream commit, patched commit, machine, model + quant, command line, environment
   variables, slot count, context size, batch settings and tensor split. A number without its
   configuration is not a result.
-- Reproduction scripts live in `scripts/multigpu/bench/`; raw output belongs in
-  `benches/multi-gpu/<machine>/`. **The scripts have not been executed yet; no results are recorded.**
+- Reproduction scripts live in `scripts/multigpu/bench/` and the run directory; raw output lives in
+  `benches/multi-gpu/<machine>/<run>/` (JSON, server logs, the chain log). The chart in the header is
+  generated from those JSON files by `scripts/multigpu/bench/plot-grid.py`, never drawn by hand.
 
 ## 9. Known limitations
 
@@ -346,8 +370,8 @@ surface has stopped being useful for its actual purpose. Building and packaging:
 Ongoing optimization work. Patchset: 47 commits, in production use on machine-01 since 2026-10-05
 (validated there with the owner's own gate suite: 5-user coherence at 200k context, mixed prefill +
 decode, client aborts, cache restore, 15-minute soak); benchmark protocol, CI and validation tiers
-defined; benchmark numbers published 2026-10-05 ([§4](#4-performance-summary)); Tier B in public CI: **not run yet**
-([§6](#6-downloads)).
+defined; benchmark numbers published 2026-10-05 ([§1](#1-performance-summary)); Tier B in public CI: **not run yet**
+([§4](#4-downloads)).
 
 **Success condition.** When upstream llama.cpp reaches roughly equivalent performance for these
 workloads and the downstream patches stop providing material value, the correct outcome is to stop

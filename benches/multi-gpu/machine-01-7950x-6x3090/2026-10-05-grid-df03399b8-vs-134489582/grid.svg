@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="680" viewBox="0 0 1060 680" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+<style>.t{font-size:15px;font-weight:600;fill:#222}.s{font-size:11px;fill:#555}.g{stroke:#e3e3e3;stroke-width:1}.v{font-size:11px;font-weight:600}.r{font-size:13px;font-weight:700}.h{font-size:12px;fill:#333}</style>
+<rect width="1060" height="680" fill="#ffffff"/>
+<line x1="70" y1="24" x2="98" y2="24" stroke="#8a8a8a" stroke-width="2.5" stroke-dasharray="6 4"/><text x="104" y="28" class="h">upstream llama.cpp</text>
+<line x1="270" y1="24" x2="298" y2="24" stroke="#d35400" stroke-width="2.5"/><text x="304" y="28" class="h">llama.cpp-multigpu</text>
+<text x="70" y="50" class="s">Qwen3.8-Flash-Next UD-Q4_K_XL · 6 × RTX 3090 (machine-01) · 5 slots × 262k ctx · q8_0 KV · 128 greedy tokens · upstream df03399b8 vs multigpu 134489582 · 2026-10-05</text>
+<text x="70" y="72" class="t">Prefill, 1 session</text>
+<text x="70" y="89" class="s">tokens/s</text>
+<line x1="70" y1="315.0" x2="470" y2="315.0" class="g"/>
+<text x="62" y="319.0" class="s" text-anchor="end">0</text>
+<line x1="70" y1="272.0" x2="470" y2="272.0" class="g"/>
+<text x="62" y="276.0" class="s" text-anchor="end">500</text>
+<line x1="70" y1="229.0" x2="470" y2="229.0" class="g"/>
+<text x="62" y="233.0" class="s" text-anchor="end">1000</text>
+<line x1="70" y1="186.0" x2="470" y2="186.0" class="g"/>
+<text x="62" y="190.0" class="s" text-anchor="end">1500</text>
+<line x1="70" y1="143.0" x2="470" y2="143.0" class="g"/>
+<text x="62" y="147.0" class="s" text-anchor="end">2000</text>
+<line x1="70" y1="100.0" x2="470" y2="100.0" class="g"/>
+<text x="62" y="104.0" class="s" text-anchor="end">2500</text>
+<text x="70.0" y="333" class="s" text-anchor="middle">5k</text>
+<text x="143.5" y="333" class="s" text-anchor="middle">50k</text>
+<text x="306.7" y="333" class="s" text-anchor="middle">150k</text>
+<text x="388.4" y="333" class="s" text-anchor="middle">200k</text>
+<text x="470.0" y="333" class="s" text-anchor="middle">250k</text>
+<text x="270.0" y="351" class="s" text-anchor="middle">context length (tokens)</text>
+<polyline points="70.0,253.5 143.5,266.2 306.7,283.4 388.4,287.9 470.0,292.4" fill="none" stroke="#8a8a8a" stroke-width="2.5" stroke-dasharray="6 4"/>
+<circle cx="70.0" cy="253.5" r="3.5" fill="#8a8a8a"/>
+<circle cx="143.5" cy="266.2" r="3.5" fill="#8a8a8a"/>
+<circle cx="306.7" cy="283.4" r="3.5" fill="#8a8a8a"/>
+<circle cx="388.4" cy="287.9" r="3.5" fill="#8a8a8a"/>
+<circle cx="470.0" cy="292.4" r="3.5" fill="#8a8a8a"/>
+<text x="80.0" y="271.5" class="v" fill="#8a8a8a" text-anchor="start">715</text>
+<text x="464.0" y="310.4" class="v" fill="#8a8a8a" text-anchor="end">263</text>
+<polyline points="70.0,207.6 143.5,132.1 306.7,129.9 388.4,132.5 470.0,133.4" fill="none" stroke="#d35400" stroke-width="2.5"/>
+<circle cx="70.0" cy="207.6" r="3.5" fill="#d35400"/>
+<circle cx="143.5" cy="132.1" r="3.5" fill="#d35400"/>
+<circle cx="306.7" cy="129.9" r="3.5" fill="#d35400"/>
+<circle cx="388.4" cy="132.5" r="3.5" fill="#d35400"/>
+<circle cx="470.0" cy="133.4" r="3.5" fill="#d35400"/>
+<text x="80.0" y="199.6" class="v" fill="#d35400" text-anchor="start">1249</text>
+<text x="464.0" y="125.4" class="v" fill="#d35400" text-anchor="end">2111</text>
+<text x="470" y="89" class="r" fill="#d35400" text-anchor="end">8.0× at 250k</text>
+<text x="580" y="72" class="t">Prefill, 5 concurrent sessions</text>
+<text x="580" y="89" class="s">tokens/s, aggregate</text>
+<line x1="580" y1="315.0" x2="980" y2="315.0" class="g"/>
+<text x="572" y="319.0" class="s" text-anchor="end">0</text>
+<line x1="580" y1="272.0" x2="980" y2="272.0" class="g"/>
+<text x="572" y="276.0" class="s" text-anchor="end">500</text>
+<line x1="580" y1="229.0" x2="980" y2="229.0" class="g"/>
+<text x="572" y="233.0" class="s" text-anchor="end">1000</text>
+<line x1="580" y1="186.0" x2="980" y2="186.0" class="g"/>
+<text x="572" y="190.0" class="s" text-anchor="end">1500</text>
+<line x1="580" y1="143.0" x2="980" y2="143.0" class="g"/>
+<text x="572" y="147.0" class="s" text-anchor="end">2000</text>
+<line x1="580" y1="100.0" x2="980" y2="100.0" class="g"/>
+<text x="572" y="104.0" class="s" text-anchor="end">2500</text>
+<text x="580.0" y="333" class="s" text-anchor="middle">5k</text>
+<text x="653.5" y="333" class="s" text-anchor="middle">50k</text>
+<text x="816.7" y="333" class="s" text-anchor="middle">150k</text>
+<text x="898.4" y="333" class="s" text-anchor="middle">200k</text>
+<text x="980.0" y="333" class="s" text-anchor="middle">250k</text>
+<text x="780.0" y="351" class="s" text-anchor="middle">context length (tokens)</text>
+<polyline points="580.0,260.8 653.5,265.6 816.7,283.8 898.4,288.6 980.0,292.2" fill="none" stroke="#8a8a8a" stroke-width="2.5" stroke-dasharray="6 4"/>
+<circle cx="580.0" cy="260.8" r="3.5" fill="#8a8a8a"/>
+<circle cx="653.5" cy="265.6" r="3.5" fill="#8a8a8a"/>
+<circle cx="816.7" cy="283.8" r="3.5" fill="#8a8a8a"/>
+<circle cx="898.4" cy="288.6" r="3.5" fill="#8a8a8a"/>
+<circle cx="980.0" cy="292.2" r="3.5" fill="#8a8a8a"/>
+<text x="590.0" y="278.8" class="v" fill="#8a8a8a" text-anchor="start">630</text>
+<text x="974.0" y="310.2" class="v" fill="#8a8a8a" text-anchor="end">265</text>
+<polyline points="580.0,132.6 653.5,117.1 816.7,121.4 898.4,127.6 980.0,137.9" fill="none" stroke="#d35400" stroke-width="2.5"/>
+<circle cx="580.0" cy="132.6" r="3.5" fill="#d35400"/>
+<circle cx="653.5" cy="117.1" r="3.5" fill="#d35400"/>
+<circle cx="816.7" cy="121.4" r="3.5" fill="#d35400"/>
+<circle cx="898.4" cy="127.6" r="3.5" fill="#d35400"/>
+<circle cx="980.0" cy="137.9" r="3.5" fill="#d35400"/>
+<text x="590.0" y="124.6" class="v" fill="#d35400" text-anchor="start">2120</text>
+<text x="974.0" y="129.9" class="v" fill="#d35400" text-anchor="end">2060</text>
+<text x="980" y="89" class="r" fill="#d35400" text-anchor="end">7.8× at 250k</text>
+<text x="70" y="377" class="t">Generation, 1 session</text>
+<text x="70" y="394" class="s">tokens/s</text>
+<line x1="70" y1="620.0" x2="470" y2="620.0" class="g"/>
+<text x="62" y="624.0" class="s" text-anchor="end">0</text>
+<line x1="70" y1="577.0" x2="470" y2="577.0" class="g"/>
+<text x="62" y="581.0" class="s" text-anchor="end">10</text>
+<line x1="70" y1="534.0" x2="470" y2="534.0" class="g"/>
+<text x="62" y="538.0" class="s" text-anchor="end">20</text>
+<line x1="70" y1="491.0" x2="470" y2="491.0" class="g"/>
+<text x="62" y="495.0" class="s" text-anchor="end">30</text>
+<line x1="70" y1="448.0" x2="470" y2="448.0" class="g"/>
+<text x="62" y="452.0" class="s" text-anchor="end">40</text>
+<line x1="70" y1="405.0" x2="470" y2="405.0" class="g"/>
+<text x="62" y="409.0" class="s" text-anchor="end">50</text>
+<text x="70.0" y="638" class="s" text-anchor="middle">5k</text>
+<text x="143.5" y="638" class="s" text-anchor="middle">50k</text>
+<text x="306.7" y="638" class="s" text-anchor="middle">150k</text>
+<text x="388.4" y="638" class="s" text-anchor="middle">200k</text>
+<text x="470.0" y="638" class="s" text-anchor="middle">250k</text>
+<text x="270.0" y="656" class="s" text-anchor="middle">context length (tokens)</text>
+<polyline points="70.0,454.6 143.5,509.4 306.7,559.6 388.4,568.7 470.0,575.9" fill="none" stroke="#8a8a8a" stroke-width="2.5" stroke-dasharray="6 4"/>
+<circle cx="70.0" cy="454.6" r="3.5" fill="#8a8a8a"/>
+<circle cx="143.5" cy="509.4" r="3.5" fill="#8a8a8a"/>
+<circle cx="306.7" cy="559.6" r="3.5" fill="#8a8a8a"/>
+<circle cx="388.4" cy="568.7" r="3.5" fill="#8a8a8a"/>
+<circle cx="470.0" cy="575.9" r="3.5" fill="#8a8a8a"/>
+<text x="80.0" y="472.6" class="v" fill="#8a8a8a" text-anchor="start">38.5</text>
+<text x="464.0" y="593.9" class="v" fill="#8a8a8a" text-anchor="end">10.2</text>
+<polyline points="70.0,422.6 143.5,439.8 306.7,457.5 388.4,462.5 470.0,475.0" fill="none" stroke="#d35400" stroke-width="2.5"/>
+<circle cx="70.0" cy="422.6" r="3.5" fill="#d35400"/>
+<circle cx="143.5" cy="439.8" r="3.5" fill="#d35400"/>
+<circle cx="306.7" cy="457.5" r="3.5" fill="#d35400"/>
+<circle cx="388.4" cy="462.5" r="3.5" fill="#d35400"/>
+<circle cx="470.0" cy="475.0" r="3.5" fill="#d35400"/>
+<text x="80.0" y="414.6" class="v" fill="#d35400" text-anchor="start">45.9</text>
+<text x="464.0" y="467.0" class="v" fill="#d35400" text-anchor="end">33.7</text>
+<text x="470" y="394" class="r" fill="#d35400" text-anchor="end">3.3× at 250k</text>
+<text x="580" y="377" class="t">Generation, 5 concurrent sessions</text>
+<text x="580" y="394" class="s">tokens/s, aggregate over 5 sessions</text>
+<line x1="580" y1="620.0" x2="980" y2="620.0" class="g"/>
+<text x="572" y="624.0" class="s" text-anchor="end">0</text>
+<line x1="580" y1="566.2" x2="980" y2="566.2" class="g"/>
+<text x="572" y="570.2" class="s" text-anchor="end">50</text>
+<line x1="580" y1="512.5" x2="980" y2="512.5" class="g"/>
+<text x="572" y="516.5" class="s" text-anchor="end">100</text>
+<line x1="580" y1="458.8" x2="980" y2="458.8" class="g"/>
+<text x="572" y="462.8" class="s" text-anchor="end">150</text>
+<line x1="580" y1="405.0" x2="980" y2="405.0" class="g"/>
+<text x="572" y="409.0" class="s" text-anchor="end">200</text>
+<text x="580.0" y="638" class="s" text-anchor="middle">5k</text>
+<text x="653.5" y="638" class="s" text-anchor="middle">50k</text>
+<text x="816.7" y="638" class="s" text-anchor="middle">150k</text>
+<text x="898.4" y="638" class="s" text-anchor="middle">200k</text>
+<text x="980.0" y="638" class="s" text-anchor="middle">250k</text>
+<text x="780.0" y="656" class="s" text-anchor="middle">context length (tokens)</text>
+<polyline points="580.0,536.9 653.5,582.6 816.7,603.0 898.4,607.5 980.0,610.2" fill="none" stroke="#8a8a8a" stroke-width="2.5" stroke-dasharray="6 4"/>
+<circle cx="580.0" cy="536.9" r="3.5" fill="#8a8a8a"/>
+<circle cx="653.5" cy="582.6" r="3.5" fill="#8a8a8a"/>
+<circle cx="816.7" cy="603.0" r="3.5" fill="#8a8a8a"/>
+<circle cx="898.4" cy="607.5" r="3.5" fill="#8a8a8a"/>
+<circle cx="980.0" cy="610.2" r="3.5" fill="#8a8a8a"/>
+<text x="590.0" y="554.9" class="v" fill="#8a8a8a" text-anchor="start">77.3</text>
+<text x="974.0" y="628.2" class="v" fill="#8a8a8a" text-anchor="end">9.1</text>
+<polyline points="580.0,431.6 653.5,455.2 816.7,487.7 898.4,506.2 980.0,514.7" fill="none" stroke="#d35400" stroke-width="2.5"/>
+<circle cx="580.0" cy="431.6" r="3.5" fill="#d35400"/>
+<circle cx="653.5" cy="455.2" r="3.5" fill="#d35400"/>
+<circle cx="816.7" cy="487.7" r="3.5" fill="#d35400"/>
+<circle cx="898.4" cy="506.2" r="3.5" fill="#d35400"/>
+<circle cx="980.0" cy="514.7" r="3.5" fill="#d35400"/>
+<text x="590.0" y="423.6" class="v" fill="#d35400" text-anchor="start">175</text>
+<text x="974.0" y="506.7" class="v" fill="#d35400" text-anchor="end">98.0</text>
+<text x="980" y="394" class="r" fill="#d35400" text-anchor="end">10.8× at 250k</text>
+</svg>

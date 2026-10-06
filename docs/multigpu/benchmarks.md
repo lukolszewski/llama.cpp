@@ -4,7 +4,7 @@ Benchmarks are the reason this fork exists: a performance claim without a measur
 upstream revision and a named machine is not a result. The machine-01 grid was measured on 2026-10-05
 (results below); every remaining `TBD` means "not measured", never "approximately".
 
-- Headline table: [README §4](../../README.md#4-performance-summary)
+- Headline table: [README §1](../../README.md#1-performance-summary)
 - This document: suites, protocol, metric definitions, machine records, reproduction steps
 - Raw output: `benches/multi-gpu/<machine>/`
 
@@ -232,10 +232,11 @@ scripts/multigpu/bench/run-5-slot.py --server http://127.0.0.1:8080 --slots 5 --
 # 5. paste the resulting table rows here, plus the raw files into benches/multi-gpu/<machine>/
 ```
 
-The scripts in `scripts/multigpu/bench/` implement the protocol above. **They have not been executed
-yet**, so treat them as unverified until a first run; report problems, do not quietly adjust the
-protocol afterwards. Each run must print both commit hashes into its output file so a stray JSON blob
-can still be attributed.
+The scripts in `scripts/multigpu/bench/` implement the protocol above; the 2026-10-05 grid was produced
+with the copies committed next to its raw data (`readme_grid.py`, `readme_table.py`, `bench_server.sh`,
+`readme_grid_chain.log`). Report problems, do not quietly adjust the protocol afterwards. Each run must
+print both commit hashes into its output file so a stray JSON blob can still be attributed. The README
+header chart is generated from the raw JSON by `scripts/multigpu/bench/plot-grid.py`.
 
 For comparisons against upstream, run the same script twice with different `--bin` values, on the same
 machine, same model file, same session, ideally back-to-back to keep thermal state comparable. Record
