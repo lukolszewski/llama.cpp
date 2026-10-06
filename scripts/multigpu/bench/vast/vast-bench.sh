@@ -190,7 +190,8 @@ land_results() {   # land_results RESULTS_DIR MACHINE_NAME
   local day="${run%%-grid-*}" branch="bench/$name-${run%%-grid-*}"
   local mdir="benches/multi-gpu/$name" rdir="benches/multi-gpu/$name/$run"
   git fetch -q origin "$BASE_BRANCH"
-  git checkout -q -b "$branch" "origin/$BASE_BRANCH" || die "cannot create branch $branch (exists?)"
+  local n=2; while git show-ref --verify --quiet "refs/heads/$branch" || git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; do branch="bench/$name-${run%%-grid-*}-$n"; n=$((n+1)); done
+  git checkout -q -b "$branch" "origin/$BASE_BRANCH" || die "cannot create branch $branch"
   mkdir -p "$rdir"
   cp -a "$src"/. "$rdir"/
   rm -f "$rdir/onstart.log" "$rdir/.booted" "$rdir/.onstart"
