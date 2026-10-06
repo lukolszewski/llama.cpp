@@ -344,7 +344,7 @@ cleanup() {
 }
 trap cleanup EXIT; trap 'EXIT_CODE=130; exit 130' INT TERM
 
-CREATE="$(vastai create instance "$O_ID" --image "$IMAGE" --disk "$DISK" --ssh --direct --label "$LABEL" --onstart-cmd "$ONSTART" --raw 2>&1)" \
+CREATE="$(vastai create instance "$O_ID" --image "$IMAGE" --disk "$DISK" --ssh --direct --cancel-unavail --label "$LABEL" --onstart-cmd "$ONSTART" --raw 2>&1)" \
   || { echo "$CREATE"; EXIT_CODE=3; die "vastai create instance failed" 3; }
 INSTANCE="$(printf '%s' "$CREATE" | python3 -c 'import json,sys; t=sys.stdin.read(); d=json.loads(t[t.index("{"):]); print(d.get("new_contract") or "")' 2>/dev/null)"
 [ -n "$INSTANCE" ] || { echo "$CREATE"; EXIT_CODE=3; die "no instance id in the create response" 3; }
@@ -353,18 +353,31 @@ log "instance $INSTANCE created (offer $O_ID, machine $O_MACHINE, $O_N x $O_GPU,
 
 # 1. running
 t=$(date +%s)
+STARTS=0
 while :; do
   J="$(vast_json show instance "$INSTANCE")"; ST="$(jq -r '.actual_status // "?"' <<<"$J")"; MSG="$(jq -r '.status_msg // ""' <<<"$J" | tr '\n' ' ' | cut -c1-120)"
+  INT="$(jq -r '.intended_status // "?"' <<<"$J")"
   [ "$ST" = running ] && break
+  # Vast creates a STOPPED instance when the offer vanished between search and create (or the host refused);
+  # it would sit there forever. One start attempt, then give up.
+  if [ "$INT" = stopped ] && [ $(( $(date +%s) - t )) -gt 60 ]; then
+    if [ "$STARTS" -eq 0 ]; then STARTS=1; log "  instance is intended=stopped (offer gone or host refused); trying 'vastai start instance'"; vastai start instance "$INSTANCE" >/dev/null 2>&1 || true
+    elif [ $(( $(date +%s) - t )) -gt 240 ]; then EXIT_CODE=3; die "instance stays stopped (intended_status=stopped) - the offer was not actually available; rerun to pick another" 3; fi
+  fi
   [ $(( $(date +%s) - t )) -lt "$BOOT_TIMEOUT" ] || { EXIT_CODE=3; die "instance not running after ${BOOT_TIMEOUT}s (status $ST: $MSG)" 3; }
   log "  status=$ST $MSG"; sleep 20
 done
 log "instance running after $(( $(date +%s) - t ))s"
+log "ssh-url: $(vastai ssh-url "$INSTANCE" 2>&1 | tr -d '\r' | tail -1) | public_ipaddr=$(jq -r '.public_ipaddr // "-"' <<<"$J") ports=$(jq -c '.ports // {}' <<<"$J" | cut -c1-200)"
 
 # 2. ssh reachable and onstart fired
 t=$(date +%s)
 until out="$(rssh "$INSTANCE" 'cat /results/.onstart 2>/dev/null; nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader 2>/dev/null | head -1' 2>/dev/null)" && [ -n "$out" ]; do
-  [ $(( $(date +%s) - t )) -lt "$SSH_TIMEOUT" ] || { EXIT_CODE=5; die "ssh/onstart not reachable after ${SSH_TIMEOUT}s" 5; }
+  if [ $(( $(date +%s) - t )) -ge "$SSH_TIMEOUT" ]; then
+    log "ssh never answered; last ssh error:"; rssh "$INSTANCE" true 2>&1 | tail -3 | sed 's/^/   /'
+    log "instance logs (vastai logs, tail):"; vastai logs "$INSTANCE" --tail 40 2>&1 | tail -40 | sed 's/^/   | /'
+    EXIT_CODE=5; die "ssh/onstart not reachable after ${SSH_TIMEOUT}s" 5
+  fi
   sleep 15
 done
 log "ssh ok: $(echo "$out" | tail -1)"
