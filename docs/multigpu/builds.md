@@ -117,8 +117,9 @@ CI runs `llama-server --version` inside the image and checks that `ldd` resolves
 | `server-cuda12.9-sm86-<sha7>` | push build | no |
 | `server-cuda12.9-sm86` | latest push to `multigpu` | yes |
 
-The package is created by the first push with the workflow's `GITHUB_TOKEN`; its visibility must be set
-to public once by hand (GitHub → Packages → package settings), the API does not expose that switch.
+The package was created by the first push with the workflow's `GITHUB_TOKEN` and is public (anonymous
+`docker pull` works); check with `docker manifest inspect ghcr.io/lukolszewski/llama.cpp-multigpu:server-cuda12.9-sm86`
+after a sync in case GitHub ever resets it.
 
 ## Release scheme
 
