@@ -221,9 +221,16 @@ monitor_start() { # monitor_start <total_bytes> <paths-newline-list>
     local prev=0 now rate
     while :; do
       sleep "$PROGRESS_INTERVAL"
-      now=$(printf '%s\n' "$list" | awk -F'\t' -v d="$MODEL_DIR" -v q="$QUANT/" -v flat="$FLATTEN" '
-        NF>=1 { p=$1; if (flat=="1" && index(p,q)==1) p=substr(p,length(q)+1); f = d "/" p; cmd = "stat -c %s \"" f "\" 2>/dev/null"; cmd | getline s; close(cmd); s += 0; sum += s }
-        END { print sum + 0 }')
+      # allocated bytes (du -B1), not apparent size: aria2 writes 16 segments into a sparse file whose
+      # apparent size reaches the final size within seconds (machine-02 run showed "126 %" with stat -c %s)
+      now=0
+      while IFS=$'\t' read -r _p _s _o; do
+        [ -z "$_p" ] && continue
+        [ "$FLATTEN" = "1" ] && _p="${_p#"$QUANT/"}"
+        _a=$(du -B1 "$MODEL_DIR/$_p" 2>/dev/null | cut -f1); _a=${_a:-0}
+        [ "$_a" -gt "${_s:-0}" ] 2>/dev/null && _a="$_s"
+        now=$(( now + _a ))
+      done <<< "$list"
       rate=$(( (now - prev) / PROGRESS_INTERVAL )); [ "$rate" -lt 0 ] && rate=0
       prev="$now"
       awk -v n="$now" -v t="$total" -v r="$rate" 'BEGIN{
