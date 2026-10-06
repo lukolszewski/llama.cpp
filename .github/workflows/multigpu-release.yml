@@ -107,27 +107,30 @@ jobs:
             expect_ptx: 'sm_80,sm_90'
             driver_floor: 'R580+ (CUDA 13); a driver as new as CUDA 13.4 for the PTX-only GPUs'
     env:
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
       DEBIAN_FRONTEND: noninteractive
       ARCH_LIST: ${{ matrix.arch_list }}
       VERSION: ${{ needs.gate.outputs.version }}
       TAG: ${{ needs.gate.outputs.tag }}
     steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.gate.outputs.sha }}
-          fetch-depth: 0
-
+      # git must exist BEFORE actions/checkout runs: without it the action downloads a tarball through the
+      # REST API and leaves no .git, and build-info.sh (provenance) and cmake's build number need the repo.
       - name: Install build dependencies
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build git ccache libssl-dev libgomp1 jq curl ca-certificates binutils python3
+          # ${{ github.workspace }} is the HOST path in container jobs; $GITHUB_WORKSPACE is the container path.
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          fetch-depth: 0
 
       - name: ccache
         uses: actions/cache@v5
         with:
-          path: ${{ github.workspace }}/.ccache
+          path: .ccache
           key: multigpu-release-${{ matrix.flavour }}-${{ needs.gate.outputs.sha }}
           restore-keys: |
             multigpu-release-${{ matrix.flavour }}-

@@ -66,25 +66,28 @@ jobs:
       short_sha: ${{ steps.meta.outputs.short_sha }}
       archive: ${{ steps.meta.outputs.archive }}
     env:
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
       DEBIAN_FRONTEND: noninteractive
     steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ inputs.ref || github.sha }}
-          fetch-depth: 0
-
+      # git must exist BEFORE actions/checkout runs: without it the action downloads a tarball through the
+      # REST API and leaves no .git, and build-info.sh (provenance) and cmake's build number need the repo.
       - name: Install build dependencies
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build git git-lfs ccache libssl-dev libgomp1 jq curl ca-certificates binutils python3
           git lfs install   # test-tokenizers-ggml-vocabs clones ggml-org/vocabs, whose .gguf files are LFS objects
+          # ${{ github.workspace }} is the HOST path in container jobs; $GITHUB_WORKSPACE is the container path.
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 0
 
       - name: ccache
         uses: actions/cache@v5
         with:
-          path: ${{ github.workspace }}/.ccache
+          path: .ccache
           key: multigpu-cuda${{ env.CUDA_SHORT }}-sm86-${{ github.sha }}
           restore-keys: |
             multigpu-cuda${{ env.CUDA_SHORT }}-sm86-
