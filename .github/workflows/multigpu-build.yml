@@ -20,6 +20,7 @@ on:
     paths-ignore:
       - 'docs/**'
       - 'benches/**'
+      - 'scripts/multigpu/bench/**'   # benchmark/plot tooling, not part of the build
       - '**/*.md'
       - '.github/ISSUE_TEMPLATE/**'
       - '.github/workflows/multigpu-release.yml'
