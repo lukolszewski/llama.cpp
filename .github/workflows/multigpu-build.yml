@@ -78,7 +78,8 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            build-essential cmake ninja-build git ccache libssl-dev libgomp1 jq curl ca-certificates binutils python3
+            build-essential cmake ninja-build git git-lfs ccache libssl-dev libgomp1 jq curl ca-certificates binutils python3
+          git lfs install   # test-tokenizers-ggml-vocabs clones ggml-org/vocabs, whose .gguf files are LFS objects
 
       - name: ccache
         uses: actions/cache@v5
