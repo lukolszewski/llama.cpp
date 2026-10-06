@@ -1,0 +1,147 @@
+{
+ "label": "upstream",
+ "url": "http://127.0.0.1:8009",
+ "gen_tokens": 128,
+ "rows": [
+  {
+   "slots": 1,
+   "size_tokens": 5000,
+   "gpu_before": "46, 63.73;42, 58.34;42, 55.26;51, 61.93;42, 57.26;57, 65.33;41, 13.19;35, 8.63",
+   "t_start": "18:04:45",
+   "pp_agg": 1917.9,
+   "pp_slot_min": 1963.6,
+   "pp_slot_mean": 1963.6,
+   "pp_slot_max": 1963.6,
+   "prompt_n": [
+    4990
+   ],
+   "ttft_min": 2.6,
+   "ttft_max": 2.6,
+   "pp_wall": 2.6,
+   "tg_agg": 58.38,
+   "tg_slot_min": 62.18,
+   "tg_slot_mean": 62.18,
+   "tg_slot_max": 62.18,
+   "prompt_n_round2": [
+    4
+   ],
+   "tg_wall": 2.2,
+   "texts": [
+    "\n\n<think>\n\n</think>\n\nI cannot continue the text generation as requested, because"
+   ],
+   "gpu_after": "47, 83.91;43, 77.44;43, 74.11;52, 86.92;44, 75.70;59, 96.33;41, 12.96;35, 8.44"
+  },
+  {
+   "slots": 1,
+   "size_tokens": 50000,
+   "gpu_before": "47, 83.91;43, 77.44;42, 74.11;52, 86.92;44, 75.70;59, 96.33;41, 12.96;35, 8.44",
+   "t_start": "18:04:50",
+   "pp_agg": 1704.5,
+   "pp_slot_min": 1728.4,
+   "pp_slot_mean": 1728.4,
+   "pp_slot_max": 1728.4,
+   "prompt_n": [
+    49676
+   ],
+   "ttft_min": 29.1,
+   "ttft_max": 29.1,
+   "pp_wall": 29.1,
+   "tg_agg": 41.83,
+   "tg_slot_min": 46.19,
+   "tg_slot_mean": 46.19,
+   "tg_slot_max": 46.19,
+   "prompt_n_round2": [
+    4
+   ],
+   "tg_wall": 3.1,
+   "texts": [
+    "\n\n<think>\n\n</think>\n\nI cannot continue the generation of repetitive technical ke"
+   ],
+   "gpu_after": "47, 89.66;43, 82.69;43, 79.68;52, 92.67;46, 91.24;60, 100.57;41, 12.42;35, 8.42"
+  },
+  {
+   "slots": 1,
+   "size_tokens": 150000,
+   "gpu_before": "47, 89.66;43, 82.69;43, 79.68;52, 92.67;46, 80.35;58, 100.57;41, 12.42;35, 8.42",
+   "t_start": "18:05:23",
+   "pp_agg": 1030.1,
+   "pp_slot_min": 1038.8,
+   "pp_slot_mean": 1038.8,
+   "pp_slot_max": 1038.8,
+   "prompt_n": [
+    148976
+   ],
+   "ttft_min": 144.6,
+   "ttft_max": 144.6,
+   "pp_wall": 144.6,
+   "tg_agg": 25.78,
+   "tg_slot_min": 29.28,
+   "tg_slot_mean": 29.28,
+   "tg_slot_max": 29.28,
+   "prompt_n_round2": [
+    4
+   ],
+   "tg_wall": 5.0,
+   "texts": [
+    " what is the capital of France?\n\n<think>\nThe user's message is an extremely long"
+   ],
+   "gpu_after": "48, 96.21;45, 106.35;42, 87.31;52, 98.37;46, 91.38;60, 109.64;41, 12.24;35, 8.54"
+  },
+  {
+   "slots": 1,
+   "size_tokens": 200000,
+   "gpu_before": "48, 96.21;45, 112.49;42, 87.31;52, 98.37;44, 91.38;60, 103.20;41, 12.24;35, 8.54",
+   "t_start": "18:07:53",
+   "pp_agg": 859.5,
+   "pp_slot_min": 866.2,
+   "pp_slot_mean": 866.2,
+   "pp_slot_max": 866.2,
+   "prompt_n": [
+    198626
+   ],
+   "ttft_min": 231.1,
+   "ttft_max": 231.1,
+   "pp_wall": 231.1,
+   "tg_agg": 21.82,
+   "tg_slot_min": 25.06,
+   "tg_slot_mean": 25.06,
+   "tg_slot_max": 25.06,
+   "prompt_n_round2": [
+    4
+   ],
+   "tg_wall": 5.9,
+   "texts": [
+    "\n\n<think>\nThe user's message is an extremely long, repetitive block of text that"
+   ],
+   "gpu_after": "49, 99.52;48, 124.09;42, 92.00;51, 102.12;45, 95.31;57, 107.68;41, 11.81;35, 8.25"
+  },
+  {
+   "slots": 1,
+   "size_tokens": 250000,
+   "gpu_before": "47, 99.52;48, 124.09;41, 92.00;51, 102.12;45, 92.65;57, 107.68;41, 11.81;35, 8.25",
+   "t_start": "18:11:50",
+   "pp_agg": 737.8,
+   "pp_slot_min": 743.7,
+   "pp_slot_mean": 743.7,
+   "pp_slot_max": 743.7,
+   "prompt_n": [
+    248276
+   ],
+   "ttft_min": 336.5,
+   "ttft_max": 336.5,
+   "pp_wall": 336.5,
+   "tg_agg": 18.23,
+   "tg_slot_min": 21.01,
+   "tg_slot_mean": 21.01,
+   "tg_slot_max": 21.01,
+   "prompt_n_round2": [
+    4
+   ],
+   "tg_wall": 7.0,
+   "texts": [
+    "\n\n<think>\nThe user's message is an extremely long, repetitive block of text that"
+   ],
+   "gpu_after": "47, 99.15;46, 106.46;41, 97.29;51, 101.83;44, 94.51;56, 108.06;41, 12.75;35, 8.41"
+  }
+ ]
+}
