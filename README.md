@@ -7,7 +7,7 @@
 [![upstream base](https://img.shields.io/badge/upstream%20llama.cpp-df03399b8-lightgrey)](https://github.com/ggml-org/llama.cpp/commit/df03399b885831b2a1603b3abb0d8c156808e363)
 [![license MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-### Up to 8× faster prefill and up to 10× faster generation than stock llama.cpp — Qwen3.8-Flash-Next on consumer multi-GPU machines
+### Up to 10× faster prefill and up to 10× faster generation than stock llama.cpp — Qwen3.8-Flash-Next on consumer multi-GPU machines
 
 Upstream's speed falls with context length and collapses under concurrency; this build stays flat. Measured
 2026-10-05 on 6 × RTX 3090 (constrained PCIe), same model, same command line, upstream = the commit this
@@ -21,6 +21,19 @@ patchset branches from:
 | generation, 1 session | 50k | 25.7 t/s | **41.9 t/s** | 1.6× |
 | generation, 1 session | 250k | 10.2 t/s | **33.7 t/s** | 3.3× |
 | generation, 5 sessions (per session) | 250k | 2.3 t/s | **27.3 t/s** | **10.8×** |
+
+Reproduced 2026-10-06 on a rented box with **6 × RTX 4090** (Vast.ai, PCIe Gen4 x8, no NVLink; `machine-02`), both builds
+in the same instance, same protocol; single session:
+
+| workload | context | upstream llama.cpp | llama.cpp-multigpu | gain |
+| --- | --- | ---: | ---: | ---: |
+| prefill, 1 session | 50k | 1728 t/s | **7050 t/s** | 4.1× |
+| prefill, 1 session | 250k | 744 t/s | **7403 t/s** | **10.0×** |
+| generation, 1 session | 50k | 46.2 t/s | **57.5 t/s** | 1.2× |
+| generation, 1 session | 250k | 21.0 t/s | **48.7 t/s** | 2.3× |
+
+With five concurrent sessions the patched build held 7200–8800 t/s aggregate prefill and 30.8 t/s per session of
+generation at 250k on the 4090s (the five-session upstream rows were not measured there; full table in §1).
 
 ![prefill and generation throughput vs context length, upstream vs llama.cpp-multigpu, 1 and 5 sessions](benches/multi-gpu/machine-01-7950x-6x3090/2026-10-05-grid-df03399b8-vs-134489582/grid.svg)
 
@@ -93,7 +106,14 @@ exactly where the workload lives — long contexts, several sessions — and sma
 
 Mixed prefill + generation is deliberately absent from the headline table and is documented separately
 in [docs/multigpu/benchmarks.md#mixed-workload-behavior](docs/multigpu/benchmarks.md#mixed-workload-behavior).
-<!-- rented-machines:begin --><!-- rented-machines:end -->
+<!-- rented-machines:begin -->
+
+Other machines (rented, one run each; same protocol, generated from the raw JSON by `vast-bench.sh land`; upstream = the fork's upstream base built with the same recipe when measured):
+
+| machine | GPUs | prefill, 1 session (t/s) | generation, concurrent sessions (t/s) | upstream measured | run |
+| --- | --- | --- | --- | --- | --- |
+| [machine-02-6x4090](benches/multi-gpu/machine-02-6x4090/hardware.md) | 6 of 8 × NVIDIA GeForce RTX 4090 (191 GB in the box) | 744 → 7403 (10.0×) at 250k | 30.8 per session, 5 sessions at 250k | yes | [2026-10-06-grid-df03399-vs-6a8a599](benches/multi-gpu/machine-02-6x4090/2026-10-06-grid-df03399-vs-6a8a599/) |
+<!-- rented-machines:end -->
 
 ## 2. Hardware tested
 
@@ -122,10 +142,12 @@ Fields marked `TBD` are not yet measured (PCIe link state under load needs root)
 The constrained-PCIe topology is not incidental: it is the condition under which several of these
 patches produce their effect. Results from this machine should not be assumed to transfer to systems
 with fast GPU interconnects, and results from different machines are never merged into one table.
-Additional machines (rented multi-4090 / multi-5090 / V100 boxes) get their own `machine-NN` directory and
-configuration record, produced by the Vast.ai benchmark tooling in
-[scripts/multigpu/bench/vast/](scripts/multigpu/bench/vast/README.md); their rows appear in §1 only once a
-run exists.
+`machine-02` is a rented Vast.ai box: 8 × GeForce RTX 4090 (24 GB), of which six were used for a like-for-like
+layer split; Intel Xeon Platinum 8352V, 755 GiB RAM, PCIe Gen4 x8 per GPU, no NVLink, driver 570.211 (CUDA 12.8).
+Record: [benches/multi-gpu/machine-02-6x4090/hardware.md](benches/multi-gpu/machine-02-6x4090/hardware.md).
+Further machines (multi-5090, V100) get their own `machine-NN` directory and record, produced by the Vast.ai
+benchmark tooling in [scripts/multigpu/bench/vast/](scripts/multigpu/bench/vast/README.md); their rows appear
+in §1 only once a run exists.
 
 ## 3. Current target
 
