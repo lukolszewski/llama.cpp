@@ -32,7 +32,7 @@ OFFER=""; IMAGE="${MGBENCH_IMAGE:-ghcr.io/lukolszewski/llama.cpp-multigpu:bench-
 UPSTREAM=0; UPSTREAM_SIZES=""; UPSTREAM_SLOTS=""
 SIZES="5000,50000,150000,200000,250000"; SLOTS="1,5"
 MACHINE_NAME=""; DISK="180"; HF_TOKEN_ENV=""; EXTRA_ENV=""; EXTRA_QUERY=""
-MIN_INET="800"; MIN_CPU_RAM="48"; MIN_DISK="160"; MIN_VRAM_GB="140"; MIN_RELIABILITY="0.95"
+MIN_INET="800"; MIN_CPU_RAM="48"; MIN_DISK="160"; MIN_VRAM_GB="140"; MIN_RELIABILITY="0.95"; INGRESS_GB="115"
 BOOT_TIMEOUT="1800"; SSH_TIMEOUT="600"; POLL="60"
 DRY_RUN=0; KEEP=0; NO_LAND=0; NO_PR=0; INSTANCE=""; RESULTS=""; DEST=""; CLEANUP=0; ALLOW_DIRTY=0; BASE_BRANCH="multigpu"
 SSH_KEY="${MGBENCH_SSH_KEY:-$HOME/.ssh/vastai_ed25519}"
@@ -54,7 +54,7 @@ while [ $# -gt 0 ]; do
     --query) EXTRA_QUERY="$EXTRA_QUERY $2"; shift 2 ;;
     --min-inet) MIN_INET="$2"; shift 2 ;;    --min-cpu-ram) MIN_CPU_RAM="$2"; shift 2 ;;
     --min-disk) MIN_DISK="$2"; shift 2 ;;    --min-vram) MIN_VRAM_GB="$2"; shift 2 ;;
-    --min-reliability) MIN_RELIABILITY="$2"; shift 2 ;;
+    --min-reliability) MIN_RELIABILITY="$2"; shift 2 ;; --ingress-gb) INGRESS_GB="$2"; shift 2 ;;
     --boot-timeout) BOOT_TIMEOUT="$2"; shift 2 ;; --ssh-timeout) SSH_TIMEOUT="$2"; shift 2 ;; --poll) POLL="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;           --keep) KEEP=1; shift ;;
     --no-land) NO_LAND=1; shift ;;           --no-pr) NO_PR=1; shift ;;
@@ -118,8 +118,8 @@ pick_offer() {   # sets OFFER_JSON for --offer ID or the cheapest match
 }
 budget_check() {
   local credit; credit="$(vast_json show user | jq -r '.credit // 0')"
-  EST="$(py "print(round($O_DPH*$MAX_HOURS + $DISK*$O_STORAGE/730*$MAX_HOURS + 115*$O_INETC, 2))")"
-  log "offer $O_ID: $O_N x $O_GPU ($O_VRAM GB), \$$O_DPH/h + disk + ~115 GB download -> worst case \$$EST for $MAX_HOURS h; credit \$$credit; cap \$$MAX_USD"
+  EST="$(py "print(round($O_DPH*$MAX_HOURS + $DISK*$O_STORAGE/730*$MAX_HOURS + $INGRESS_GB*$O_INETC, 2))")"
+  log "offer $O_ID: $O_N x $O_GPU ($O_VRAM GB), \$$O_DPH/h + disk + $INGRESS_GB GB ingress at \$$O_INETC/GB -> worst case \$$EST for $MAX_HOURS h; credit \$$credit; cap \$$MAX_USD"
   py "import sys; sys.exit(0 if $EST <= $MAX_USD else 1)" || die "worst-case cost \$$EST exceeds --max-usd $MAX_USD (lower --max-hours, pick a cheaper offer, or raise the cap)" 2
   py "import sys; sys.exit(0 if $EST <= $credit - 0.5 else 1)" || die "worst-case cost \$$EST exceeds the account credit \$$credit minus a \$0.50 margin" 2
 }

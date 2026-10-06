@@ -82,6 +82,7 @@ scripts/multigpu/bench/vast/vast-bench.sh run --gpu RTX_3090 --num-gpus 1 --min-
 | `--disk` | 180 GB | instance disk (model 104 GB + image) |
 | `--min-inet`, `--min-cpu-ram`, `--min-disk`, `--min-vram`, `--min-reliability` | 800 Mb/s, 48 GB, 160 GB, 140 GB, 0.95 | offer filters (VRAM filter is applied client-side on `gpu_total_ram`) |
 | `--query 'expr'` | | extra Vast filter, e.g. `--query 'geolocation in [US,CA]'` |
+| `--ingress-gb` | 115 | download volume used in the cost estimate (some hosts charge $0.01–0.02/GB; the model is 104 GB) |
 | `--env K=V` | | extra container variables (see the entrypoint's knobs) |
 | `--hf-token-env NAME` | none | forward `$NAME` as `HF_TOKEN` |
 | `--boot-timeout`, `--ssh-timeout`, `--poll` | 1800 s, 600 s, 60 s | image pull + boot can take 20+ min on a slow host (seen: 15 min for 4 GB); the instance is destroyed on expiry |
