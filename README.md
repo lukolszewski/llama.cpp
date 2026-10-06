@@ -160,7 +160,7 @@ tagged `multigpu` commit. Each release ships **two Linux x86-64 CUDA builds** wi
 | archive | CUDA | GPUs with native code (SASS) | PTX for other GPUs (compiled by the driver at load) | minimum driver |
 | --- | --- | --- | --- | --- |
 | `llama.cpp-multigpu-<date>-bin-ubuntu-cuda-12.9-x64.tar.gz` | 12.9 | V100 `sm_70`, RTX 30xx/A-series `sm_86`, RTX 40xx `sm_89`, RTX 50xx `sm_120a`/`sm_121a` | Maxwell `sm_50`, Pascal `sm_61`, Turing `sm_75`, A100 `sm_80`, H100 `sm_90` | R525+ for native targets; R570+ for Blackwell; R575+ (CUDA 12.9 PTX) for the PTX-only GPUs |
-| `llama.cpp-multigpu-<date>-bin-ubuntu-cuda-13.4-x64.tar.gz` | 13.4 | `sm_86`, `sm_89`, `sm_120a`, `sm_121a` | `sm_80`, `sm_90` (CUDA 13 cannot target Maxwell/Pascal/Volta; Turing left out) | R580+ |
+| `llama.cpp-multigpu-<date>-bin-ubuntu-cuda-13.4-x64.tar.gz` | 13.4 | `sm_86`, `sm_89`, `sm_120a`, `sm_121a` | `sm_80`, `sm_90` (CUDA 13 cannot target Maxwell/Pascal/Volta; Turing left out) | R580+ for the tarball; the **container image** needs a driver reporting CUDA ≥ 13.4 (NVIDIA base-image check; `-e NVIDIA_DISABLE_REQUIRE=1` bypasses it on 13.x drivers, verified on 13.2) |
 
 Pick `cuda-12.9` unless you specifically want the CUDA 13 toolkit; the RTX 3090 benchmark machine runs it.
 Next to each build: a `cudart-…` archive with the matching CUDA runtime + cuBLAS libraries (for hosts
@@ -183,7 +183,8 @@ opaque binaries: if you can name the archive, you can name the source revision.
 packaging and integrity (Tier A: archive unpacks, binaries run, the declared SASS/PTX targets are really
 embedded, downstream flags are wired, metadata matches the commit) for every artifact. Runtime
 validation on real hardware (Tier B) exists only for Linux / `sm_86` (6 × RTX 3090, the maintainer's
-machine, the same configuration that serves production). Every other architecture in these archives is
+machine, the same configuration that serves production): both `multigpu-20261006` images served the model
+there with the production flags (details in [docs/multigpu/builds.md](docs/multigpu/builds.md)). Every other architecture in these archives is
 compiled, not run: those builds are ordinary llama.cpp builds, labelled "built and packaging-checked;
 not runtime-validated by us". We do not withhold binaries that people need, and we do not attach test
 claims we did not earn. Reports from other hardware (archive name, GPU model/count, driver) are the

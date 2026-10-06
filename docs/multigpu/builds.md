@@ -25,7 +25,7 @@ rerun it after every upstream sync, GitHub re-registers workflows from the defau
 | flavour | toolkit image | `CMAKE_CUDA_ARCHITECTURES` | native code (SASS) | PTX (JIT by the driver) | minimum driver |
 | --- | --- | --- | --- | --- | --- |
 | `cuda-12.9` | `nvidia/cuda:12.9.1-devel-ubuntu24.04` | `50-virtual;61-virtual;70-virtual;70-real;75-virtual;80-virtual;86-real;89-real;90-virtual;120a-real;121a-real` | `sm_70` (V100), `sm_86`, `sm_89`, `sm_120a`, `sm_121a` | `sm_50`, `sm_61`, `sm_70`, `sm_75`, `sm_80`, `sm_90` | R525+ (12.x minor-version compatibility) for the SASS targets; R570+ for Blackwell GPUs; R575+ (a driver that understands CUDA 12.9 PTX) for the PTX-only GPUs |
-| `cuda-13.4` | `nvidia/cuda:13.4.1-devel-ubuntu24.04` | `80-virtual;86-real;89-real;90-virtual;120a-real;121a-real` | `sm_86`, `sm_89`, `sm_120a`, `sm_121a` | `sm_80`, `sm_90` | R580+ (CUDA 13); PTX-only GPUs need a driver as new as CUDA 13.4 |
+| `cuda-13.4` | `nvidia/cuda:13.4.1-devel-ubuntu24.04` | `80-virtual;86-real;89-real;90-virtual;120a-real;121a-real` | `sm_86`, `sm_89`, `sm_120a`, `sm_121a` | `sm_80`, `sm_90` | tarball: R580+ (CUDA 13 minor-version compatibility for the SASS targets); **container image: a driver reporting CUDA ≥ 13.4**, because NVIDIA's base image declares `NVIDIA_REQUIRE_CUDA=cuda>=13.4` and the container runtime refuses to start it on older drivers — on a 13.2 driver run it with `-e NVIDIA_DISABLE_REQUIRE=1` (verified on machine-01, driver 595.99); PTX-only GPUs need a driver as new as CUDA 13.4 |
 
 Why these two:
 
@@ -169,6 +169,13 @@ configuration that serves production and produced the README numbers. The opt-in
 start a 5-slot server, generate, record the per-device memory split, run one `llama-bench` pass. Until
 that runner is registered, Tier B for a release means the maintainer pulling the `cuda-12.9` image on
 machine-01 and running the smoke there.
+
+**Tier B record for `multigpu-20261006`** (machine-01, 2026-10-06, production flags: 5 slots × 262144, q8_0 KV,
+groups = 5): `server-cuda12.9-20261006` served the model, 120-token single-user completion at 51 t/s, two
+concurrent users at 49/48 t/s each, zero server errors. `server-cuda13.4-20261006` is refused by the NVIDIA
+container runtime on this host's 595.99 driver (CUDA 13.2 < the image's `cuda>=13.4` requirement); with
+`NVIDIA_DISABLE_REQUIRE=1` it served the same model at 49 t/s single / 44–46 t/s with two users, zero errors
+(minor-version compatibility, native sm_86 kernels). Log: `testing/smoke-release-20261006.log` on machine-01.
 
 Everything else (`sm_70`, `sm_89`, `sm_120a`/`sm_121a`, every PTX target, the whole `cuda-13.4`
 flavour) ships as an ordinary llama.cpp build: Tier A passed, Tier B not attempted, labelled "built and
