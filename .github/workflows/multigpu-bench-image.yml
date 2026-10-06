@@ -30,6 +30,10 @@ on:
         description: 'push to ghcr'
         default: true
         type: boolean
+      extra_tag:
+        description: 'additional tag to apply (e.g. bench-cuda12.9-20261006.1)'
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -55,6 +59,7 @@ jobs:
           SHORT_SHA="${GITHUB_SHA:0:7}"
           TAGS=("$IMAGE:bench-cuda12.9-$SHORT_SHA")
           if [ "$GITHUB_REF_NAME" = multigpu ]; then TAGS+=("$IMAGE:bench-cuda12.9"); else TAGS+=("$IMAGE:bench-cuda12.9-dev"); fi
+          [ -z "${{ inputs.extra_tag }}" ] || TAGS+=("$IMAGE:${{ inputs.extra_tag }}")
           args=(); for t in "${TAGS[@]}"; do args+=(-t "$t"); done
           docker build -f .devops/multigpu-bench.Dockerfile \
             --build-arg BASE_IMAGE="$BASE_IMAGE" \

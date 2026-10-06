@@ -414,6 +414,6 @@ jobs:
             --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" --build-arg APP_VERSION="$TAG" \
             --build-arg APP_REVISION="${{ needs.gate.outputs.sha }}" "${args[@]}" .
           docker run --rm --entrypoint /app/llama-server "${TAGS[0]}" --version
-          docker run --rm "${TAGS[0]}" dry-run | grep -q -- '--prefill-max-partial'
+          dry="$(docker run --rm "${TAGS[0]}" dry-run)"; grep -q -- '--prefill-max-partial' <<<"$dry"   # no pipe into grep -q: SIGPIPE under pipefail
           for t in "${TAGS[@]}"; do docker push "$t"; done
           { echo "### Bench image"; for t in "${TAGS[@]}"; do echo "- \`$t\`"; done; } >> "$GITHUB_STEP_SUMMARY"
