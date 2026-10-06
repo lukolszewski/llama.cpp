@@ -19,7 +19,11 @@
 #   scripts/multigpu/validate-artifact.sh --archive FILE.tar.gz [--expect-arch sm_86,sm_89]
 #                                         [--expect-ptx sm_50,sm_61,...] [--expect-no-ptx]
 #                                         [--expect-flags --prefill-max-partial,...]
-#                                         [--expect-commit SHA] [--keep]
+#                                         [--expect-commit SHA] [--upstream-build] [--keep]
+#
+# --upstream-build validates an unmodified upstream llama.cpp build packaged by multigpu-baseline.yml: no
+# BUILD_INFO.json/AUTHORS are expected, the fork's flags must be ABSENT, and --expect-commit is checked
+# against the hash `llama-server --version` prints.
 #
 # --expect-arch lists the SASS (real) architectures that must be embedded; --expect-ptx lists the PTX
 # (virtual) targets; --expect-no-ptx asserts the archive carries no PTX at all (sm_86-only CI images).
@@ -31,8 +35,11 @@ ARCHIVE=""
 EXPECT_ARCH=""
 EXPECT_PTX=""
 EXPECT_NO_PTX=""
+# note: --cache-idle-slots is also an upstream flag (present at df03399b8); with --upstream-build pass an
+# --expect-flags list of fork-only flags (multigpu-baseline.yml does).
 EXPECT_FLAGS="--prefill-max-partial,--prefill-long-threshold,--prefill-max-long,--seq-compact,--cache-idle-slots"
 EXPECT_COMMIT=""
+UPSTREAM_BUILD=""
 KEEP=""
 WORKDIR=""
 
@@ -44,6 +51,7 @@ while [ $# -gt 0 ]; do
         --expect-no-ptx) EXPECT_NO_PTX=1; shift ;;
         --expect-flags)  EXPECT_FLAGS="$2"; shift 2 ;;
         --expect-commit) EXPECT_COMMIT="$2"; shift 2 ;;
+        --upstream-build) UPSTREAM_BUILD=1; shift ;;
         --keep)          KEEP=1; shift ;;
         -h|--help)       grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "validate-artifact: unknown argument: $1" >&2; exit 1 ;;
@@ -79,10 +87,14 @@ note "llama-server at ${BINDIR#"$WORKDIR"/}"
 
 # ---------------------------------------------------------------- 2. metadata files
 echo "-- metadata and license presence"
-for f in BUILD_INFO.json BUILD_INFO.txt LICENSE AUTHORS; do
+META_FILES="BUILD_INFO.json BUILD_INFO.txt LICENSE AUTHORS"
+[ -z "$UPSTREAM_BUILD" ] || META_FILES="LICENSE UPSTREAM_BUILD.txt"
+for f in $META_FILES; do
     if [ -e "$BINDIR/$f" ]; then note "$f present"; else bad "$f missing from the archive"; fi
 done
-if command -v jq >/dev/null 2>&1 && [ -f "$BINDIR/BUILD_INFO.json" ]; then
+if [ -n "$UPSTREAM_BUILD" ]; then
+    skip "upstream build: no BUILD_INFO.json expected (commit is checked from --version below)"
+elif command -v jq >/dev/null 2>&1 && [ -f "$BINDIR/BUILD_INFO.json" ]; then
     if jq -e . "$BINDIR/BUILD_INFO.json" > /dev/null; then note "BUILD_INFO.json parses"; else bad "BUILD_INFO.json is not valid JSON"; fi
     for key in multigpu_commit upstream_base_commit cuda_architectures platform backend; do
         val="$(jq -r ".${key} // \"<missing>\"" "$BINDIR/BUILD_INFO.json")"
@@ -105,6 +117,11 @@ echo "-- execution (no GPU involved)"
 export LD_LIBRARY_PATH="$BINDIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 if "$BIN" --version > "$WORKDIR/version.txt" 2>&1; then
     note "llama-server --version: $(head -1 "$WORKDIR/version.txt")"
+    if [ -n "$UPSTREAM_BUILD" ] && [ -n "$EXPECT_COMMIT" ]; then
+        # upstream prints "version: 0.4.0-dev (build 10902, commit df03399b8)"; older builds "(df03399b8)"
+        vh="$(grep -oE '(commit |\()[0-9a-f]{7,40}\)' "$WORKDIR/version.txt" | head -1 | grep -oE '[0-9a-f]{7,40}' || true)"
+        case "$EXPECT_COMMIT" in "$vh"*) [ -n "$vh" ] && note "--version commit $vh matches $EXPECT_COMMIT" || bad "no commit hash in --version output";; *) bad "--version commit $vh != expected $EXPECT_COMMIT";; esac
+    fi
 else
     bad "llama-server --version exited non-zero"
     sed 's/^/      /' "$WORKDIR/version.txt" | head -20
@@ -132,9 +149,9 @@ IFS=',' read -r -a flags <<< "$EXPECT_FLAGS"
 for flag in "${flags[@]}"; do
     [ -n "$flag" ] || continue
     if grep -q -- "$flag" "$WORKDIR/help.txt"; then
-        note "$flag advertised (its patch is in this build)"
+        if [ -n "$UPSTREAM_BUILD" ]; then bad "$flag advertised - this is not an unmodified upstream build"; else note "$flag advertised (its patch is in this build)"; fi
     else
-        bad "$flag missing - a downstream patch is not in this binary"
+        if [ -n "$UPSTREAM_BUILD" ]; then note "$flag absent (unmodified upstream, as expected)"; else bad "$flag missing - a downstream patch is not in this binary"; fi
     fi
 done
 

@@ -1,0 +1,192 @@
+# Upstream baseline for benchmarks: an UNMODIFIED upstream llama.cpp commit (normally the fork's upstream
+# base, see BUILD_INFO.json .upstream_base_commit) built with exactly the cuda-12.9 release recipe
+# (multigpu-release.yml), packaged as `llama.cpp-upstream-<sha7>-bin-ubuntu-cuda-12.9-x64.tar.gz` and
+# attached to a prerelease `baseline-<sha7>`. The bench image (scripts/multigpu/bench/vast/) downloads it
+# at run time for the "upstream" side of the README grid, so the two sides of every comparison come from
+# the same toolchain and the same architecture list. Upstream itself publishes no Linux CUDA tarball and
+# no `server-cuda-b<N>` image for these build numbers (checked 2026-10-06 for b10850..b10902).
+#
+# Trigger: push a tag `baseline-<sha7>` (any commit that contains this file), or dispatch with the sha.
+name: multigpu-baseline
+
+on:
+  push:
+    tags: ['baseline-*']
+  workflow_dispatch:
+    inputs:
+      upstream_sha:
+        description: 'upstream llama.cpp commit to build (7..40 hex chars; must be reachable from this repository)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: multigpu-baseline-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build upstream cuda-12.9
+    runs-on: ${{ vars.MULTIGPU_RUNNER || 'ubuntu-24.04' }}
+    container:
+      image: nvidia/cuda:12.9.1-devel-ubuntu24.04
+      options: --user root
+    defaults:
+      run:
+        shell: bash
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      ARCH_LIST: '50-virtual;61-virtual;70-virtual;70-real;75-virtual;80-virtual;86-real;89-real;90-virtual;120a-real;121a-real'
+      EXPECT_SASS: 'sm_70,sm_86,sm_89,sm_120a,sm_121a'
+      EXPECT_PTX: 'sm_50,sm_61,sm_70,sm_75,sm_80,sm_90'
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      sha7: ${{ steps.resolve.outputs.sha7 }}
+      build_number: ${{ steps.resolve.outputs.build_number }}
+      asset: ${{ steps.pkg.outputs.asset }}
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build git ccache libssl-dev libgomp1 jq curl ca-certificates binutils python3
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache" >> "$GITHUB_ENV"
+
+      # The fork repository contains the whole upstream history, so the upstream commit is reachable here.
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve the upstream commit
+        id: resolve
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          case "$GITHUB_EVENT_NAME" in
+            push) want="${GITHUB_REF_NAME#baseline-}" ;;
+            *)    want="${{ inputs.upstream_sha }}" ;;
+          esac
+          echo "$want" | grep -qE '^[0-9a-f]{7,40}$' || { echo "::error::'$want' is not a commit hash"; exit 1; }
+          sha="$(git rev-parse --verify "${want}^{commit}")" || { echo "::error::$want is not reachable from this repository (git fetch upstream first)"; exit 1; }
+          # Refuse anything that carries the fork's code: the baseline must be an upstream commit.
+          if git merge-base --is-ancestor "$sha" "origin/multigpu" 2>/dev/null && git show "$sha":scripts/multigpu/build-info.sh >/dev/null 2>&1; then
+            echo "::error::$sha contains scripts/multigpu (fork code); the baseline must be an upstream commit"; exit 1
+          fi
+          git checkout -q --detach "$sha"
+          n="$(git rev-list --count HEAD)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"; echo "sha7=${sha:0:7}" >> "$GITHUB_OUTPUT"; echo "build_number=$n" >> "$GITHUB_OUTPUT"
+          echo "upstream $sha (b$n): $(git log -1 --format='%s' HEAD)"
+          # the fork's packaging gate, taken from the workflow's own commit (not present in the upstream tree)
+          mkdir -p .fork && git show "$GITHUB_SHA":scripts/multigpu/validate-artifact.sh > .fork/validate-artifact.sh && chmod +x .fork/validate-artifact.sh
+
+      - name: ccache
+        uses: actions/cache@v5
+        with:
+          path: .ccache
+          key: multigpu-baseline-cuda-12.9-${{ steps.resolve.outputs.sha }}
+          restore-keys: |
+            multigpu-baseline-cuda-12.9-
+            multigpu-release-cuda-12.9-
+
+      - name: Configure (identical to the cuda-12.9 release flavour)
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CUDA=ON \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DLLAMA_BUILD_SERVER=ON \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_UI=OFF \
+            -DLLAMA_USE_PREBUILT_UI=OFF \
+            -DLLAMA_OPENSSL=ON \
+            -DCMAKE_CUDA_ARCHITECTURES="$ARCH_LIST" \
+            -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: cmake --build build --config Release -j "$(nproc)"
+
+      - name: Package
+        id: pkg
+        env:
+          SHA: ${{ steps.resolve.outputs.sha }}
+          SHA7: ${{ steps.resolve.outputs.sha7 }}
+          BN: ${{ steps.resolve.outputs.build_number }}
+        run: |
+          NAME="llama.cpp-upstream-${SHA7}-bin-ubuntu-cuda-12.9-x64"
+          mkdir -p "pkg/$NAME"
+          cp -a build/bin/. "pkg/$NAME/"
+          cp LICENSE "pkg/$NAME/"
+          {
+            echo "unmodified upstream llama.cpp build for benchmark baselines"
+            echo "upstream commit : $SHA (b$BN)"
+            echo "built           : $(date -u +%Y-%m-%dT%H:%M:%SZ) by $GITHUB_REPOSITORY multigpu-baseline.yml run $GITHUB_RUN_ID"
+            echo "toolchain       : nvidia/cuda:12.9.1-devel-ubuntu24.04, $(cc --version | head -1), $(cmake --version | head -1)"
+            echo "architectures   : $ARCH_LIST"
+            echo "SASS            : $EXPECT_SASS"
+            echo "PTX             : $EXPECT_PTX"
+            echo "recipe          : same cmake flags as the cuda-12.9 flavour of multigpu-release.yml (no downstream patches)"
+          } > "pkg/$NAME/UPSTREAM_BUILD.txt"
+          cat "pkg/$NAME/UPSTREAM_BUILD.txt"
+          tar -C pkg -czf "$NAME.tar.gz" "$NAME"
+          sha256sum "$NAME.tar.gz" | tee "$NAME.tar.gz.sha256"
+          echo "asset=$NAME.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Gate (SASS + PTX embedded, no downstream flags, commit matches)
+        env:
+          SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          # flags that exist ONLY in the fork (--cache-idle-slots also exists upstream since before df03399b8)
+          .fork/validate-artifact.sh --archive "${{ steps.pkg.outputs.asset }}" --upstream-build \
+            --expect-flags --prefill-max-partial,--prefill-long-threshold,--prefill-max-long,--seq-compact \
+            --expect-arch "$EXPECT_SASS" --expect-ptx "$EXPECT_PTX" --expect-commit "$SHA"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: baseline-cuda-12.9
+          path: |
+            llama.cpp-upstream-*.tar.gz
+            llama.cpp-upstream-*.tar.gz.sha256
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: ccache statistics
+        if: always()
+        run: ccache --show-stats || true
+
+  release:
+    name: prerelease baseline-${{ needs.build.outputs.sha7 }}
+    needs: build
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: baseline-${{ needs.build.outputs.sha7 }}
+      SHA: ${{ needs.build.outputs.sha }}
+      BN: ${{ needs.build.outputs.build_number }}
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: baseline-cuda-12.9
+          path: out
+      - name: Create or update the prerelease
+        run: |
+          set -euo pipefail
+          notes="$(printf '%s\n\n%s' \
+            "Unmodified upstream [llama.cpp](https://github.com/ggml-org/llama.cpp) commit [\`${SHA:0:9}\`](https://github.com/ggml-org/llama.cpp/commit/$SHA) (build b$BN), compiled with the cuda-12.9 recipe of this repository's release workflow (CUDA 12.9.1, SASS sm_70/86/89/120a/121a, PTX sm_50/61/70/75/80/90), no downstream patches." \
+            "It is the **upstream side** of the benchmark grids in \`benches/multi-gpu/\` and is fetched by the bench image (\`scripts/multigpu/bench/vast/\`). Not a release of llama.cpp-multigpu; for those see the \`multigpu-*\` releases. Needs the CUDA 12.9 runtime libraries (\`cudart-…\` archive of any \`multigpu-*\` release, or NVIDIA's \`nvidia/cuda:12.9.1-runtime\` image) and an R525+ driver (R575+ for PTX-only GPUs).")"
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" out/* --clobber -R "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" out/* -R "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" \
+              --title "Upstream baseline ${SHA:0:9} (b$BN), cuda-12.9 recipe" --notes "$notes"
+          fi
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json url,assets --jq '.url, (.assets[].name)'

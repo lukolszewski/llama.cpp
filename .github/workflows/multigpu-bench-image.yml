@@ -1,0 +1,85 @@
+# Bench image for rented machines: the cuda-12.9 server image + the README grid runner
+# (.devops/multigpu-bench.Dockerfile, scripts/multigpu/bench/vast/). Rebuilt whenever its inputs change on
+# `multigpu` or a `bench-*` branch, so an orchestrator run never needs a registry credential on the
+# workstation. The release workflow additionally pins `bench-cuda12.9-<version>` for every release.
+#
+# Tags: `bench-cuda12.9-<sha7>` always; `bench-cuda12.9` (moving) from `multigpu`; `bench-cuda12.9-dev`
+# (moving) from any other branch.
+name: multigpu-bench-image
+
+on:
+  push:
+    branches: [multigpu, 'bench-*']
+    paths:
+      - '.devops/multigpu-bench.Dockerfile'
+      - 'scripts/multigpu/bench/vast/entrypoint.sh'
+      - 'scripts/multigpu/bench/vast/download-model.sh'
+      - 'scripts/multigpu/bench/vast/healthcheck.sh'
+      - 'scripts/multigpu/bench/vast/collect-hardware.py'
+      - 'scripts/multigpu/bench/readme_grid.py'
+      - 'scripts/multigpu/bench/readme_table.py'
+      - 'scripts/multigpu/bench/plot-grid.py'
+      - '.github/workflows/multigpu-bench-image.yml'
+  workflow_dispatch:
+    inputs:
+      base_image:
+        description: 'server image to build FROM'
+        default: 'ghcr.io/lukolszewski/llama.cpp-multigpu:server-cuda12.9'
+        type: string
+      push_image:
+        description: 'push to ghcr'
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: multigpu-bench-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build and smoke
+        id: build
+        env:
+          BASE_IMAGE: ${{ inputs.base_image || 'ghcr.io/lukolszewski/llama.cpp-multigpu:server-cuda12.9' }}
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/$(echo "$GITHUB_REPOSITORY" | tr 'A-Z' 'a-z')"
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          TAGS=("$IMAGE:bench-cuda12.9-$SHORT_SHA")
+          if [ "$GITHUB_REF_NAME" = multigpu ]; then TAGS+=("$IMAGE:bench-cuda12.9"); else TAGS+=("$IMAGE:bench-cuda12.9-dev"); fi
+          args=(); for t in "${TAGS[@]}"; do args+=(-t "$t"); done
+          docker build -f .devops/multigpu-bench.Dockerfile \
+            --build-arg BASE_IMAGE="$BASE_IMAGE" \
+            --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --build-arg APP_VERSION="$GITHUB_REF_NAME" \
+            --build-arg APP_REVISION="$GITHUB_SHA" \
+            "${args[@]}" .
+          # smoke: the server binary runs, the entrypoint resolves a command line without GPUs, the tools are there
+          docker run --rm --entrypoint /app/llama-server "${TAGS[0]}" --version
+          docker run --rm "${TAGS[0]}" dry-run | tee dryrun.txt
+          grep -q -- '--prefill-max-partial' dryrun.txt
+          docker run --rm --entrypoint sh "${TAGS[0]}" -c 'aria2c --version | head -1; python3 --version; test -x /usr/local/bin/readme_grid.py; test -x /usr/local/bin/collect-hardware.py; test -x /usr/sbin/sshd'
+          docker run --rm --entrypoint sh "${TAGS[0]}" -c 'cat /app/BUILD_INFO.txt' | head -20
+          docker image inspect "${TAGS[0]}" --format 'size: {{.Size}} bytes'
+          printf '%s\n' "${TAGS[@]}" > tags.txt
+          { echo "### bench image"; echo "base: \`$BASE_IMAGE\`"; for t in "${TAGS[@]}"; do echo "- \`$t\`"; done; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Login to ghcr
+        if: ${{ github.event_name == 'push' || inputs.push_image }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push
+        if: ${{ github.event_name == 'push' || inputs.push_image }}
+        run: while read -r t; do docker push "$t"; done < tags.txt

@@ -354,7 +354,10 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ needs.gate.outputs.sha }}
-          sparse-checkout: .devops/multigpu-cuda.Dockerfile
+          sparse-checkout: |
+            .devops/multigpu-cuda.Dockerfile
+            .devops/multigpu-bench.Dockerfile
+            scripts/multigpu/bench
           sparse-checkout-cone-mode: false
 
       - uses: actions/download-artifact@v7
@@ -395,3 +398,22 @@ jobs:
           echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
           for t in "${TAGS[@]}"; do docker push "$t"; done
           { echo "### Images ($FLAVOUR)"; for t in "${TAGS[@]}"; do echo "- \`$t\`"; done; } >> "$GITHUB_STEP_SUMMARY"
+
+      # The benchmark image for rented machines is the cuda-12.9 server image + the grid runner (one image
+      # for V100 .. RTX 5090, see scripts/multigpu/bench/vast/README.md). Pinned per release here; dev builds
+      # come from multigpu-bench-image.yml.
+      - name: Bench image (cuda-12.9 only)
+        if: matrix.flavour == 'cuda-12.9'
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/$(echo "$GITHUB_REPOSITORY" | tr 'A-Z' 'a-z')"
+          BASE="$IMAGE:server-cuda12.9-$VERSION"
+          TAGS=("$IMAGE:bench-cuda12.9-$VERSION" "$IMAGE:bench-cuda12.9")
+          args=(); for t in "${TAGS[@]}"; do args+=(-t "$t"); done
+          docker build -f .devops/multigpu-bench.Dockerfile --build-arg BASE_IMAGE="$BASE" \
+            --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" --build-arg APP_VERSION="$TAG" \
+            --build-arg APP_REVISION="${{ needs.gate.outputs.sha }}" "${args[@]}" .
+          docker run --rm --entrypoint /app/llama-server "${TAGS[0]}" --version
+          docker run --rm "${TAGS[0]}" dry-run | grep -q -- '--prefill-max-partial'
+          for t in "${TAGS[@]}"; do docker push "$t"; done
+          { echo "### Bench image"; for t in "${TAGS[@]}"; do echo "- \`$t\`"; done; } >> "$GITHUB_STEP_SUMMARY"

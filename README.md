@@ -93,6 +93,7 @@ exactly where the workload lives — long contexts, several sessions — and sma
 
 Mixed prefill + generation is deliberately absent from the headline table and is documented separately
 in [docs/multigpu/benchmarks.md#mixed-workload-behavior](docs/multigpu/benchmarks.md#mixed-workload-behavior).
+<!-- rented-machines:begin --><!-- rented-machines:end -->
 
 ## 2. Hardware tested
 
@@ -121,8 +122,10 @@ Fields marked `TBD` are not yet measured (PCIe link state under load needs root)
 The constrained-PCIe topology is not incidental: it is the condition under which several of these
 patches produce their effect. Results from this machine should not be assumed to transfer to systems
 with fast GPU interconnects, and results from different machines are never merged into one table.
-The structure allows additional machines (e.g. rented multi-4090 or multi-5090 boxes) as `machine-02`,
-`machine-03`, each with its own configuration record.
+Additional machines (rented multi-4090 / multi-5090 / V100 boxes) get their own `machine-NN` directory and
+configuration record, produced by the Vast.ai benchmark tooling in
+[scripts/multigpu/bench/vast/](scripts/multigpu/bench/vast/README.md); their rows appear in §1 only once a
+run exists.
 
 ## 3. Current target
 
@@ -173,6 +176,9 @@ Container images (same archives, on NVIDIA's runtime base; `llama-server` is the
 - `ghcr.io/lukolszewski/llama.cpp-multigpu:server-cuda13.4-<date>` / `:server-cuda13.4`
 - `ghcr.io/lukolszewski/llama.cpp-multigpu:server-cuda12.9-sm86` — RTX 3090-only image rebuilt on every
   push to `multigpu` (not a release; `-<sha7>` tags are the immutable ones)
+- `ghcr.io/lukolszewski/llama.cpp-multigpu:bench-cuda12.9-<date>` / `:bench-cuda12.9` — the cuda-12.9 server
+  image plus the benchmark grid runner for rented machines (one image from V100 to RTX 5090;
+  [scripts/multigpu/bench/vast/](scripts/multigpu/bench/vast/README.md))
 
 Each archive and image contains `BUILD_INFO.json` and `BUILD_INFO.txt` recording the `multigpu` commit,
 the upstream llama.cpp base commit it sits on, the CUDA toolkit and compiler versions, the device
