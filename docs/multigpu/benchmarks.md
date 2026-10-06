@@ -197,6 +197,42 @@ different things to different users.
 Sections are appended here by `scripts/multigpu/bench/vast/vast-bench.sh land` (one per machine, same
 table shape, generated from the run's JSON). None yet.
 
+### machine-02-6x4090 (rented, Vast.ai)
+
+```
+multigpu commit:  6a8a5995f69613471b170143803ef1f4615fc5fc  (image cuda-12.9, CUDA 12.9.1; SASS sm_70,sm_86,sm_89,sm_120a,sm_121a; PTX sm_50,sm_61,sm_70,sm_75,sm_80,sm_90)
+upstream base:   df03399b885831b2a1603b3abb0d8c156808e363
+upstream: not measured on this machine (BENCH_SIDES=multigpu)
+machine:          8 x NVIDIA GeForce RTX 4090 (191 GB aggregate), GPUs used: 0,1,2,3,4,5 (6 of 8), driver 570.211.01 (CUDA 12.8), CPU Intel(R) Xeon(R) Platinum 8352V CPU @ 2.10GHz, RAM 755.2 GiB; record: benches/multi-gpu/machine-02-6x4090/hardware.md
+server:           -c 1310720 --parallel 5 -fa on --cache-type-k/v q8_0 -b 2048 -ub 512 --tensor-split 0.85,1,1,1,1,1 (patched adds --prefill-max-partial 2 and LLAMA_DECODE_PIPELINE=1 LLAMA_SERVER_GROUPS=5 LLAMA_PIPELINE_PARALLEL=1 GGML_CUDA_GRAPHS_FORCE=1 LLAMA_ATTN_ROT_DISABLE=1; speculation off)
+grid:             slots 1,5, sizes 5000,50000,150000,200000,250000; same protocol and scripts as machine-01
+measured:         2026-10-06; upstream: **not measured on this machine** (patched side only)
+raw data:         benches/multi-gpu/machine-02-6x4090/2026-10-06-grid-6a8a599-only/
+```
+
+| Workload | Context | Upstream llama.cpp | llama.cpp-multigpu | Improvement |
+| --- | --- | --- | --- | --- |
+| 1 slot - prefill | 5k | not run | 3080 | n/a |
+| 1 slot - generate | 5k | not run | 64.0 | n/a |
+| 1 slot - prefill | 50k | not run | 7216 | n/a |
+| 1 slot - generate | 50k | not run | 59.6 | n/a |
+| 1 slot - prefill | 150k | not run | 7964 | n/a |
+| 1 slot - generate | 150k | not run | 48.7 | n/a |
+| 1 slot - prefill | 200k | not run | 7774 | n/a |
+| 1 slot - generate | 200k | not run | 50.4 | n/a |
+| 1 slot - prefill | 250k | not run | 7442 | n/a |
+| 1 slot - generate | 250k | not run | 48.6 | n/a |
+| 5 slots - concurrent - prefill | 5k | not run | 6598 (2824/slot) | n/a |
+| 5 slots - concurrent - generate | 5k | not run | 244.8 (60.5/slot) | n/a |
+| 5 slots - concurrent - prefill | 50k | not run | 8788 (6286/slot) | n/a |
+| 5 slots - concurrent - generate | 50k | not run | 208.8 (55.3/slot) | n/a |
+| 5 slots - concurrent - prefill | 150k | not run | 8035 (7203/slot) | n/a |
+| 5 slots - concurrent - generate | 150k | not run | 138.6 (40.8/slot) | n/a |
+| 5 slots - concurrent - prefill | 200k | not run | 7645 (7053/slot) | n/a |
+| 5 slots - concurrent - generate | 200k | not run | 115.2 (34.5/slot) | n/a |
+| 5 slots - concurrent - prefill | 250k | not run | 7179 (6806/slot) | n/a |
+| 5 slots - concurrent - generate | 250k | not run | 98.3 (29.4/slot) | n/a |
+
 ---
 
 ## Mixed workload behavior

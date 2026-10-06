@@ -93,7 +93,14 @@ exactly where the workload lives — long contexts, several sessions — and sma
 
 Mixed prefill + generation is deliberately absent from the headline table and is documented separately
 in [docs/multigpu/benchmarks.md#mixed-workload-behavior](docs/multigpu/benchmarks.md#mixed-workload-behavior).
-<!-- rented-machines:begin --><!-- rented-machines:end -->
+<!-- rented-machines:begin -->
+
+Other machines (rented, one run each; same protocol, generated from the raw JSON by `vast-bench.sh land`; upstream = the fork's upstream base built with the same recipe when measured):
+
+| machine | GPUs | prefill, 1 session (t/s) | generation, concurrent sessions (t/s) | upstream measured | run |
+| --- | --- | --- | --- | --- | --- |
+| [machine-02-6x4090](benches/multi-gpu/machine-02-6x4090/hardware.md) | 6 of 8 × NVIDIA GeForce RTX 4090 (191 GB in the box) | 7442 at 250k | 29.4 per session, 5 sessions at 250k | no | [2026-10-06-grid-6a8a599-only](benches/multi-gpu/machine-02-6x4090/2026-10-06-grid-6a8a599-only/) |
+<!-- rented-machines:end -->
 
 ## 2. Hardware tested
 

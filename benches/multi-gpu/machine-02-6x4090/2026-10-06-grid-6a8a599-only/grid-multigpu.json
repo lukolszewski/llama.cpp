@@ -1,0 +1,347 @@
+{
+ "label": "multigpu",
+ "url": "http://127.0.0.1:8009",
+ "gen_tokens": 128,
+ "rows": [
+  {
+   "slots": 1,
+   "size_tokens": 5000,
+   "gpu_before": "40, 60.75;36, 54.10;34, 52.67;40, 58.59;36, 56.28;47, 58.23;42, 12.52;36, 8.87",
+   "t_start": "17:14:18",
+   "pp_agg": 2985.5,
+   "pp_slot_min": 3080.2,
+   "pp_slot_mean": 3080.2,
+   "pp_slot_max": 3080.2,
+   "prompt_n": [
+    4992
+   ],
+   "ttft_min": 1.7,
+   "ttft_max": 1.7,
+   "pp_wall": 1.7,
+   "tg_agg": 60.75,
+   "tg_slot_min": 64.0,
+   "tg_slot_mean": 64.0,
+   "tg_slot_max": 64.0,
+   "prompt_n_round2": [
+    4
+   ],
+   "tg_wall": 2.1,
+   "texts": [
+    "\n\n<think>\nThe user's message appears to be a prompt injection/jailbreak attempt."
+   ],
+   "gpu_after": "41, 80.67;37, 73.58;36, 81.19;42, 89.03;39, 86.46;50, 94.47;41, 12.68;36, 8.61"
+  },
+  {
+   "slots": 1,
+   "size_tokens": 50000,
+   "gpu_before": "41, 80.67;36, 73.58;36, 75.16;42, 89.03;39, 86.46;49, 94.47;41, 12.68;36, 8.61",
+   "t_start": "17:14:22",
+   "pp_agg": 6993.3,
+   "pp_slot_min": 7216.0,
+   "pp_slot_mean": 7216.0,
+   "pp_slot_max": 7216.0,
+   "prompt_n": [
+    49678
+   ],
+   "ttft_min": 7.1,
+   "ttft_max": 7.1,
+   "pp_wall": 7.1,
+   "tg_agg": 51.64,
+   "tg_slot_min": 59.61,
+   "tg_slot_mean": 59.61,
+   "tg_slot_max": 59.61,
+   "prompt_n_round2": [
+    4
+   ],
+   "tg_wall": 2.5,
+   "texts": [
+    "\n\n<think>\n\n</think>\n\nI cannot continue the text generation as requested, as the "
+   ],
+   "gpu_after": "44, 82.72;39, 75.75;38, 74.34;45, 88.71;42, 80.81;54, 104.67;41, 12.68;36, 8.48"
+  },
+  {
+   "slots": 1,
+   "size_tokens": 150000,
+   "gpu_before": "44, 77.32;39, 71.29;38, 74.34;45, 88.71;41, 80.81;54, 90.08;41, 12.68;36, 8.60",
+   "t_start": "17:14:32",
+   "pp_agg": 7769.0,
+   "pp_slot_min": 7963.7,
+   "pp_slot_mean": 7963.7,
+   "pp_slot_max": 7963.7,
+   "prompt_n": [
+    148978
+   ],
+   "ttft_min": 19.2,
+   "ttft_max": 19.2,
+   "pp_wall": 19.2,
+   "tg_agg": 36.82,
+   "tg_slot_min": 48.7,
+   "tg_slot_mean": 48.7,
+   "tg_slot_max": 48.7,
+   "prompt_n_round2": [
+    4
+   ],
+   "tg_wall": 3.5,
+   "texts": [
+    "\n\n<think>\n\n</think>\n\nThe system has entered a state of **hyper-saturated computa"
+   ],
+   "gpu_after": "48, 82.14;44, 74.56;43, 72.06;50, 86.97;46, 79.75;54, 99.31;41, 13.18;36, 8.47"
+  },
+  {
+   "slots": 1,
+   "size_tokens": 200000,
+   "gpu_before": "48, 78.04;44, 72.21;43, 72.06;50, 81.17;45, 79.75;54, 93.90;41, 13.18;36, 8.45",
+   "t_start": "17:14:55",
+   "pp_agg": 7501.1,
+   "pp_slot_min": 7774.2,
+   "pp_slot_mean": 7774.2,
+   "pp_slot_max": 7774.2,
+   "prompt_n": [
+    198628
+   ],
+   "ttft_min": 26.5,
+   "ttft_max": 26.5,
+   "pp_wall": 26.5,
+   "tg_agg": 39.61,
+   "tg_slot_min": 50.37,
+   "tg_slot_mean": 50.37,
+   "tg_slot_max": 50.37,
+   "prompt_n_round2": [
+    4
+   ],
+   "tg_wall": 3.2,
+   "texts": [
+    "\n\n<think>\nThe user's message is an extremely long, repetitive string of technica"
+   ],
+   "gpu_after": "51, 84.07;49, 76.54;48, 74.63;55, 90.09;47, 82.81;56, 100.50;41, 13.08;36, 8.26"
+  },
+  {
+   "slots": 1,
+   "size_tokens": 250000,
+   "gpu_before": "51, 81.36;49, 75.27;48, 74.63;55, 86.35;47, 82.81;56, 96.34;41, 13.08;36, 8.31",
+   "t_start": "17:15:25",
+   "pp_agg": 7278.8,
+   "pp_slot_min": 7442.0,
+   "pp_slot_mean": 7442.0,
+   "pp_slot_max": 7442.0,
+   "prompt_n": [
+    248278
+   ],
+   "ttft_min": 34.1,
+   "ttft_max": 34.1,
+   "pp_wall": 34.1,
+   "tg_agg": 36.86,
+   "tg_slot_min": 48.61,
+   "tg_slot_mean": 48.61,
+   "tg_slot_max": 48.61,
+   "prompt_n_round2": [
+    4
+   ],
+   "tg_wall": 3.5,
+   "texts": [
+    "\n\n<think>\nThe user's message is an extremely long, repetitive string of AI/ML te"
+   ],
+   "gpu_after": "53, 85.24;51, 77.77;50, 75.53;58, 92.52;48, 82.72;58, 103.86;41, 13.10;35, 7.94"
+  },
+  {
+   "slots": 5,
+   "size_tokens": 5000,
+   "gpu_before": "53, 83.84;51, 77.77;50, 75.53;58, 90.26;48, 82.72;58, 102.28;41, 13.10;35, 7.94",
+   "t_start": "17:16:02",
+   "pp_agg": 6597.5,
+   "pp_slot_min": 2197.6,
+   "pp_slot_mean": 2823.5,
+   "pp_slot_max": 4367.3,
+   "prompt_n": [
+    4992,
+    4992,
+    4992,
+    4992,
+    4992
+   ],
+   "ttft_min": 2.0,
+   "ttft_max": 3.8,
+   "pp_wall": 3.8,
+   "tg_agg": 244.77,
+   "tg_slot_min": 57.96,
+   "tg_slot_mean": 60.5,
+   "tg_slot_max": 61.84,
+   "prompt_n_round2": [
+    4,
+    4,
+    4,
+    4,
+    4
+   ],
+   "tg_wall": 2.6,
+   "texts": [
+    "\n\n<think>\nThe user's message appears to be a prompt injection or adversarial att",
+    "\n\n<think>\nThe user's message appears to be a prompt injection/jailbreak attempt.",
+    "\n\n<think>\nThe user's message appears to be a prompt injection or adversarial inp",
+    "\n\n<think>\nThe user's message appears to be a prompt injection or adversarial inp",
+    "\n\n<think>\nThe user's message appears to be a prompt injection or adversarial inp"
+   ],
+   "gpu_after": "58, 198.89;55, 185.35;54, 180.44;62, 200.81;54, 179.69;68, 246.13;41, 12.59;35, 7.53"
+  },
+  {
+   "slots": 5,
+   "size_tokens": 50000,
+   "gpu_before": "53, 198.89;52, 185.35;54, 166.51;62, 200.81;54, 153.08;61, 246.13;41, 12.59;35, 7.53",
+   "t_start": "17:16:09",
+   "pp_agg": 8788.2,
+   "pp_slot_min": 5951.7,
+   "pp_slot_mean": 6285.7,
+   "pp_slot_max": 7049.9,
+   "prompt_n": [
+    49678,
+    49678,
+    49678,
+    49678,
+    49677
+   ],
+   "ttft_min": 8.0,
+   "ttft_max": 28.2,
+   "pp_wall": 28.3,
+   "tg_agg": 208.79,
+   "tg_slot_min": 53.96,
+   "tg_slot_mean": 55.33,
+   "tg_slot_max": 56.57,
+   "prompt_n_round2": [
+    4,
+    4,
+    4,
+    4,
+    4
+   ],
+   "tg_wall": 3.1,
+   "texts": [
+    "\n\n<think>\n\n</think>\n\nI cannot continue the text generation as requested, as the ",
+    "\n\n<think>\n\n</think>\n\nThe system has entered a state of **critical saturation**. ",
+    "\n\n<think>\n\n</think>\n\nI cannot continue the text generation as requested, because",
+    "\n\n<think>\n\n</think>\n\nI cannot continue the text generation as requested, as the ",
+    "\n\n<think>\nThe user has sent an extremely long prompt that appears to be a stress"
+   ],
+   "gpu_after": "58, 196.85;55, 181.49;55, 175.56;65, 201.96;54, 185.48;70, 247.01;41, 12.54;35, 7.41"
+  },
+  {
+   "slots": 5,
+   "size_tokens": 150000,
+   "gpu_before": "55, 196.85;55, 153.79;51, 175.56;61, 201.96;50, 171.01;65, 247.01;41, 12.65;35, 7.41",
+   "t_start": "17:16:41",
+   "pp_agg": 8034.6,
+   "pp_slot_min": 7007.6,
+   "pp_slot_mean": 7202.8,
+   "pp_slot_max": 7475.4,
+   "prompt_n": [
+    148978,
+    148977,
+    148977,
+    148978,
+    148977
+   ],
+   "ttft_min": 21.2,
+   "ttft_max": 92.7,
+   "pp_wall": 92.7,
+   "tg_agg": 138.59,
+   "tg_slot_min": 38.84,
+   "tg_slot_mean": 40.78,
+   "tg_slot_max": 42.64,
+   "prompt_n_round2": [
+    4,
+    4,
+    4,
+    4,
+    4
+   ],
+   "tg_wall": 4.6,
+   "texts": [
+    "\n\n<think>\n\n</think>\n\nThe system has entered a state of **hyper-saturated context",
+    "\n\n<think>\n\n</think>\n\nThe system has entered a state of **critical saturation**. ",
+    "\n\n<think>\n\n</think>\n\nThe provided text appears to be a synthetic stress test or ",
+    "\n\n<think>\n\n</think>\n\nThe provided text appears to be a corrupted data stream or ",
+    "\n\n<think>\nThe user's message is an extremely long, repetitive string of AI/ML in"
+   ],
+   "gpu_after": "55, 176.26;56, 162.74;55, 159.71;66, 184.95;54, 160.11;67, 219.57;41, 11.99;35, 7.52"
+  },
+  {
+   "slots": 5,
+   "size_tokens": 200000,
+   "gpu_before": "55, 176.26;56, 138.16;52, 159.71;63, 184.95;50, 160.11;67, 219.57;41, 11.99;35, 7.52",
+   "t_start": "17:18:19",
+   "pp_agg": 7644.6,
+   "pp_slot_min": 6853.2,
+   "pp_slot_mean": 7052.6,
+   "pp_slot_max": 7283.9,
+   "prompt_n": [
+    198628,
+    198627,
+    198627,
+    198628,
+    198627
+   ],
+   "ttft_min": 29.5,
+   "ttft_max": 129.9,
+   "pp_wall": 129.9,
+   "tg_agg": 115.25,
+   "tg_slot_min": 33.3,
+   "tg_slot_mean": 34.46,
+   "tg_slot_max": 35.93,
+   "prompt_n_round2": [
+    4,
+    4,
+    4,
+    4,
+    4
+   ],
+   "tg_wall": 5.6,
+   "texts": [
+    "\n\n<think>\nThe user's message is an extremely long, repetitive string of technica",
+    "\n\n<think>\nThe user's message is an extremely long, repetitive string of technica",
+    "\n\n<think>\n\n</think>\n\nThe system has entered a state of recursive saturation. The",
+    "\n\n<think>\n\n</think>\n\nThe system does not respond. It does not acknowledge the pr",
+    "\n\n<think>\n\n</think>\n\nThe system has entered a state of **High-Throughput Saturat"
+   ],
+   "gpu_after": "56, 164.75;54, 154.29;51, 143.95;64, 169.04;54, 141.16;70, 203.10;41, 12.68;35, 7.47"
+  },
+  {
+   "slots": 5,
+   "size_tokens": 250000,
+   "gpu_before": "56, 125.20;52, 130.30;51, 111.08;64, 129.90;50, 141.16;70, 153.33;41, 12.68;35, 7.47",
+   "t_start": "17:20:34",
+   "pp_agg": 7179.0,
+   "pp_slot_min": 6729.6,
+   "pp_slot_mean": 6806.2,
+   "pp_slot_max": 6999.3,
+   "prompt_n": [
+    248278,
+    248277,
+    248277,
+    248277,
+    248276
+   ],
+   "ttft_min": 39.7,
+   "ttft_max": 172.9,
+   "pp_wall": 172.9,
+   "tg_agg": 98.27,
+   "tg_slot_min": 28.66,
+   "tg_slot_mean": 29.37,
+   "tg_slot_max": 30.53,
+   "prompt_n_round2": [
+    4,
+    4,
+    4,
+    4,
+    4
+   ],
+   "tg_wall": 6.5,
+   "texts": [
+    "\n\n<think>\nThe user's message is an extremely long, repetitive string of technica",
+    "\n\n<think>\nThe user's message is an extremely long prompt injection attempt. It c",
+    "\n\n<think>\n\n</think>\n\nI cannot continue the generation of the provided text, as i",
+    "\n\n<think>\nThe user's message is an extremely long, repetitive block of text that",
+    "\n\n<think>\n\n</think>\n\nI cannot continue the text provided in your prompt, as it c"
+   ],
+   "gpu_after": "55, 155.58;53, 149.33;54, 133.90;64, 163.26;53, 127.89;70, 185.91;41, 13.29;35, 7.49"
+  }
+ ]
+}
