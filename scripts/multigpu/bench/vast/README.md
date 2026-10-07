@@ -110,7 +110,7 @@ Exit codes: 2 no offer or over budget, 3 instance never ran, 4 remote `FAILED`, 
   570, 2026-10-06, ~$3 of CPU benchmarking). Without it the host driver's `libcuda` is used and any R525+ driver
   works for the SASS targets. The pre-flight now runs `llama-server --list-devices` and refuses to download the
   model when fewer CUDA devices than selected GPUs show up; after load it requires ≥ 10 GiB of VRAM in use
-  (`MIN_LOADED_MIB`); the orchestrator aborts on a first grid row below `--min-pp 300` / `--min-tg 5` t/s and
+  (`MIN_LOADED_MIB`); the orchestrator aborts on a first grid row below `--min-pp 100` / `--min-tg 5` t/s (V100-class boxes prefill at 200–400 t/s legitimately) and
   then **keeps the instance for repair in place** (`--no-repair` to destroy instead).
 - GPUs that only have **PTX** in the build (Turing `sm_75`: RTX 2080 Ti, T4) need a driver that knows CUDA
   12.9 PTX (R575+). The entrypoint checks the driver's CUDA version against `BUILD_INFO.json` and aborts
