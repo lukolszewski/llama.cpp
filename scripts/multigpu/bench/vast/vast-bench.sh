@@ -35,7 +35,7 @@ MACHINE_NAME=""; DISK="180"; HF_TOKEN_ENV=""; EXTRA_ENV=""; EXTRA_QUERY=""
 MIN_INET="800"; MIN_CPU_RAM="48"; MIN_DISK="160"; MIN_VRAM_GB="140"; MIN_RELIABILITY="0.95"; INGRESS_GB="115"
 BOOT_TIMEOUT="1800"; SSH_TIMEOUT="600"; POLL="60"
 DRY_RUN=0; KEEP=0; NO_LAND=0; NO_PR=0; INSTANCE=""; RESULTS=""; DEST=""; CLEANUP=0; ALLOW_DIRTY=0; BASE_BRANCH="multigpu"
-MIN_PP="100"; MIN_TG="5"   # CPU fallback showed 80 t/s / 6 t/s on 6x4090; six V100s legitimately prefill at ~220-400 t/s; KEEP_ON_FAIL=1; MACHINE_ID=""
+MIN_PP="100"; MIN_TG="5"; KEEP_ON_FAIL=1; MACHINE_ID=""   # CPU fallback showed 80 t/s / 6 t/s on 6x4090; six V100s legitimately prefill at ~220-400 t/s
 SSH_KEY="${MGBENCH_SSH_KEY:-$HOME/.ssh/vastai_ed25519}"
 LABEL_PREFIX="mgbench"
 
