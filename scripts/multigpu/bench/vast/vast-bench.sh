@@ -84,7 +84,10 @@ vast_json() { vastai "$@" --raw 2>/dev/null; }
 cuda_floor() { case "$1" in RTX_2080*|RTX_20*|GTX_16*|Quadro_RTX*|Tesla_T4|T4) echo 12.9 ;; *) echo 12.0 ;; esac; }
 search_offers() {
   [ -n "$GPU" ] && [ -n "$NUM_GPUS" ] || die "--gpu NAME --num-gpus N are required (names as Vast spells them: RTX_4090, RTX_5090, Tesla_V100, RTX_2080_Ti, RTX_6000Ada, RTX_PRO_6000_S)"
-  local q="num_gpus=$NUM_GPUS gpu_name=$GPU disk_space>=$MIN_DISK cpu_ram>=$MIN_CPU_RAM inet_down>=$MIN_INET cuda_vers>=$(cuda_floor "$GPU") reliability>=$MIN_RELIABILITY rentable=true verified=true direct_port_count>=2"
+  local q="num_gpus=$NUM_GPUS gpu_name=$GPU disk_space>=$MIN_DISK cpu_ram>=$MIN_CPU_RAM inet_down>=$MIN_INET reliability>=$MIN_RELIABILITY rentable=true verified=true direct_port_count>=2"
+  # cuda_vers is unset on many offers (every RTX 5090 box on 2026-10-07): only constrain it where the driver version
+  # really matters (PTX-only GPUs); everywhere else the entrypoint pre-flight asks the binary.
+  [ "$(cuda_floor "$GPU")" = 12.0 ] || q="$q cuda_vers>=$(cuda_floor "$GPU")"
   [ -n "$GPU_RAM_MIN" ] && q="$q gpu_ram>=$GPU_RAM_MIN"
   [ -n "$MAX_DPH" ] && q="$q dph<=$MAX_DPH"
   [ -n "$MACHINE_ID" ] && q="$q machine_id=$MACHINE_ID"   # same physical box as an earlier run (A/B on identical hardware)
