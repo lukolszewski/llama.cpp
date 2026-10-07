@@ -113,6 +113,7 @@ Other machines (rented, one run each; same protocol, generated from the raw JSON
 | machine | GPUs | prefill, 1 session (t/s) | generation, concurrent sessions (t/s) | upstream measured | run |
 | --- | --- | --- | --- | --- | --- |
 | [machine-02-6x4090](benches/multi-gpu/machine-02-6x4090/hardware.md) | 6 of 8 × NVIDIA GeForce RTX 4090 (191 GB in the box) | 744 → 7403 (10.0×) at 250k | 30.8 per session, 5 sessions at 250k | yes | [2026-10-06-grid-df03399-vs-6a8a599](benches/multi-gpu/machine-02-6x4090/2026-10-06-grid-df03399-vs-6a8a599/) |
+| [machine-03-6xv100](benches/multi-gpu/machine-03-6xv100/hardware.md) | 6 of 8 × Tesla V100-SXM2-32GB (256 GB in the box) | 227 → 217 (1.0×) at 250k | 30.5 per session, 5 sessions at 50k | yes | [2026-10-07-grid-df03399-vs-79a12ee](benches/multi-gpu/machine-03-6xv100/2026-10-07-grid-df03399-vs-79a12ee/) |
 <!-- rented-machines:end -->
 
 ## 2. Hardware tested
